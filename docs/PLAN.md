@@ -24,6 +24,14 @@ scratch". ceo searched GitHub; the owner picked:
   covers card-game rooms with a host referee and hidden hands; kuilt and P2pKit were looked at and are too new.
 - Check before building on it: dns-sd-kt is built with Kotlin 2.3.20 and we use 2.2.20. It must resolve and compile
   for Android (and later the iOS klib). If it does not, report to ceo; do not fork it.
+- dns-sd-kt check result (2026-11-03): 1.1.2 compiles for Android with Kotlin 2.2.20. Its iOS klib does not ("can
+  consume libraries having ABI version <= 2.2.0"): 1.1.0 to 1.1.2 are built with Kotlin 2.3.20. 1.0.4 (Kotlin 2.1.0)
+  compiles on both but misses later fixes, including a crash resolving services on Android below SDK 30 (our minSdk is
+  24). Decision (ceo, option A): use 1.1.2 now, since weeks 1 and 2 are Android only. iOS is decided in week 3: ceo
+  leans to moving uno and satti to Kotlin 2.3.20 then (this also unblocks firebase-bom 35); pinning 1.0.4 for iOS is
+  the fallback.
+- Side effects of dns-sd-kt 1.1.2 inside a game: kotlin-stdlib goes up to 2.3.20, and appcompat 1.7.1 and
+  androidx.startup 1.2.0 are added at runtime. The uno session checks these inside its app when it adds 0.1.0.
 - Seat drop past the reconnect window mid-game: a host bot takes the seat; in the lobby the seat is freed (owner
   approved 2026-11-03).
 
