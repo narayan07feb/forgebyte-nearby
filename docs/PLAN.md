@@ -241,6 +241,27 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 - Host Wi-Fi off 8 s mid-match: reconnect to the same seat (pinned room key) and finish: PASS. Host leaves: HostLeft:
   PASS. No crash in the log; app uninstalled, Wi-Fi and rotation as found, lock freed.
 
+**2026-11-04 00:08 to 00:11, night run: MINIFIED (R8) `sample-host` release on the Lava (Android 16), Mac joiner,
+same Wi-Fi.** Code: main 29049bb (v0.3.2) plus the #11 test tools; APK 975,603 bytes.
+- Phone discovery after `NearbyAndroid.init` in the R8 build: the phone's NSD found its own room 1.05 s after the
+  host started listening (`discovered 'Nearby test LAVA LZG414' at 192.168.0.106:40961, free 3, canJoin true`):
+  PASS. The first try in the script printed no line after 13 s, and the phone log had rotated before it could be read
+  again, so that miss is UNEXPLAINED; the rerun read the log every 5 s and saw the line at once.
+- Advertise and Mac discovery (JmDNS): found in 5.3 s, join request, host accept, check code `756316` on both ends,
+  full match PASS. Move round trip p50 35 ms, p95 59 ms, max 59 ms (6 moves).
+- Turn clock: every view carried the deadline, read on the Mac as 29,996 to 29,999 ms left (a 30 s turn, 1 to 4 ms
+  in transit). The Mac sat on its turn for 40 s and the turn still moved on (host auto-play for the seat): PASS. The
+  exact firing time on the phone (30 s) was not timed: UNVERIFIED.
+- Bot pacing (1 s): NOT COVERED. The sample room has no bot seat, so `botDelayMs` never ran on the phone; covered only
+  by the JVM tests.
+- Host Wi-Fi off 8 s mid-match: the joiner showed Reconnecting, came back to its seat and finished (PASS, match over
+  in 18.4 s).
+- Host leaves mid-match: `leave()` took 120 ms on the phone; the joiner ended with HostLeft: PASS.
+- Finding: after the turn timer played for the Mac, the Mac's late move got the game's own "You do not hold that
+  card." and not "Too late, another player already did that.". The client sends the seq of the newest view it has
+  received, not the seq of the view the move was chosen from, so a move chosen on an older view counts as current.
+- No crash from our app in the log; app uninstalled, Home pressed, Wi-Fi on, lock freed.
+
 ## Rules for this repo
 
 - No GitHub Actions; tests run locally (`./gradlew allTests` or the ci-local lane).
