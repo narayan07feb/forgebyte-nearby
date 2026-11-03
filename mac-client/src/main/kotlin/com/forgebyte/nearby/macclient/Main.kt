@@ -65,6 +65,8 @@ private suspend fun run(code: JoinCode?, name: String, thinkMs: Long): Boolean {
         var sentAt: TimeSource.Monotonic.ValueTimeMark? = null
         scope.launch { client.status.collect { say("status $it") } }
         scope.launch { client.checkCode.collect { if (it != null) say("check code $it (the host sees the same)") } }
+        scope.launch { client.turnTimer.collect { t -> if (t != null) say("turn clock: seat ${t.seat}, ${t.remaining.inWholeMilliseconds} ms left") } }
+        scope.launch { client.rejections.collect { say("move refused: $it") } }
         scope.launch {
             combine(client.view.filterNotNull(), client.status) { v, s -> v to s }.collect { (v, s) ->
                 sentAt?.let { rtts += it.elapsedNow(); sentAt = null } // first view after our move answers it
