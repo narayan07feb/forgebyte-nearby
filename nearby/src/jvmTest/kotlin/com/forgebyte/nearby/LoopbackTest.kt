@@ -20,6 +20,9 @@ import kotlin.time.TimeSource
 
 /** PLAN test 3: one host and three clients over localhost WebSockets. */
 class LoopbackTest {
+    @get:org.junit.Rule
+    val traceRecorder = TraceRecorder()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val host = NearbyHost(FakeGame(cardsEach = 6), Harness.config(), scope)
 
@@ -106,8 +109,13 @@ class LoopbackTest {
         withTimeout(20.seconds) {
             val port = host.open()
             val old = client(gameVersion = Harness.GAME_VERSION - 1)
+            val lines = java.util.Collections.synchronizedList(mutableListOf<String>())
+            val t0 = TimeSource.Monotonic.markNow()
+            traceSink = { lines += "${t0.elapsedNow().inWholeMilliseconds} $it" }
             old.join(code(port), "Old")
             val end = old.status.first { it is ClientStatus.Ended } as ClientStatus.Ended
+            traceSink = null
+            check(end.reason is EndReason.Refused) { "ended ${end.reason}; timeline $lines" }
             assertEquals(RefuseReason.GAME_VERSION_MISMATCH, (end.reason as EndReason.Refused).reason)
             assertEquals(1, host.lobby.value.seats.size)
         }
@@ -205,8 +213,16 @@ class LoopbackTest {
                 assertEquals(1, c.view.value!!.turn, "the host's move was played for it")
             }
         } finally {
-            // Bounded, so a hanging leave fails here instead of quietly costing minutes (seen once: 267 s, 2026-11-03).
-            withTimeout(10.seconds) { timed.leave() }
+            // Bounded, so a hanging leave fails here instead of quietly costing minutes (seen once: 267 s, 2026-11-03),
+            // and it says which step hung.
+            val lines = java.util.Collections.synchronizedList(mutableListOf<String>())
+            val t0 = TimeSource.Monotonic.markNow()
+            traceSink = { lines += "${t0.elapsedNow().inWholeMilliseconds} $it" }
+            try {
+                withTimeoutOrNull(10.seconds) { timed.leave() } ?: error("host.leave() hung > 10 s: $lines")
+            } finally {
+                traceSink = null
+            }
         }
     }
 
