@@ -93,6 +93,10 @@ public class NearbyClient<M, V>(
     private val _view = MutableStateFlow<V?>(null)
     public val view: StateFlow<V?> = _view.asStateFlow()
 
+    private val _turnTimer = MutableStateFlow<TurnTimer?>(null)
+    /** The running turn clock (whose turn, time left) for a countdown; null while bots play or with no timer. */
+    public val turnTimer: StateFlow<TurnTimer?> = _turnTimer.asStateFlow()
+
     private val _checkCode = MutableStateFlow<String?>(null)
     /** Show this while waiting for the host: the host sees the same six digits next to the request. */
     public val checkCode: StateFlow<String?> = _checkCode.asStateFlow()
@@ -231,6 +235,7 @@ public class NearbyClient<M, V>(
             is HostMsg.View -> if (msg.seq > lastSeq) {
                 lastSeq = msg.seq
                 _view.value = NearbyProtocol.json.decodeFromJsonElement(viewSerializer, msg.view)
+                _turnTimer.value = TurnTimer.from(msg.turn)
             }
             is HostMsg.MoveRejected -> _rejections.tryEmit(msg.message)
             is HostMsg.Refused -> return EndReason.Refused(msg.reason, msg.message)
