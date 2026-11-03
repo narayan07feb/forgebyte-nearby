@@ -82,7 +82,7 @@ public class NearbyClient<M, V>(
     @Volatile private var link: Link? = null
     private val sendLock = Mutex() // seal and send in one step, so frame counters reach the host in order
     @Volatile private var leaving = false
-    private var lastSeq = 0
+    @Volatile private var lastSeq = 0
 
     private val _status = MutableStateFlow<ClientStatus>(ClientStatus.Connecting)
     public val status: StateFlow<ClientStatus> = _status.asStateFlow()
@@ -92,6 +92,10 @@ public class NearbyClient<M, V>(
 
     private val _view = MutableStateFlow<V?>(null)
     public val view: StateFlow<V?> = _view.asStateFlow()
+
+    private val _seqView = MutableStateFlow<SeqView<V>?>(null)
+    /** [view] with its seq, as one value: draw from this and pass its seq to [move]. */
+    public val seqView: StateFlow<SeqView<V>?> = _seqView.asStateFlow()
 
     private val _turnTimer = MutableStateFlow<TurnTimer?>(null)
     /** The running turn clock (whose turn, time left) for a countdown; null while bots play or with no timer. */
@@ -202,8 +206,12 @@ public class NearbyClient<M, V>(
      */
     public suspend fun ready(ready: Boolean): Boolean = send(ClientMsg.Ready(ready))
 
-    public suspend fun move(move: M): Boolean =
-        send(ClientMsg.Move(NearbyProtocol.json.encodeToJsonElement(moveSerializer, move), seenSeq = lastSeq))
+    /**
+     * [seenSeq] is the seq of the view the player picked the move on ([SeqView.seq]). The default, the newest view
+     * received, is right only when nothing can arrive between drawing and the tap.
+     */
+    public suspend fun move(move: M, seenSeq: Int = lastSeq): Boolean =
+        send(ClientMsg.Move(NearbyProtocol.json.encodeToJsonElement(moveSerializer, move), seenSeq))
 
     public suspend fun leave() {
         leaving = true
@@ -239,7 +247,9 @@ public class NearbyClient<M, V>(
             is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
             is HostMsg.View -> if (msg.seq > lastSeq) {
                 lastSeq = msg.seq
-                _view.value = NearbyProtocol.json.decodeFromJsonElement(viewSerializer, msg.view)
+                val v = NearbyProtocol.json.decodeFromJsonElement(viewSerializer, msg.view)
+                _seqView.value = SeqView(msg.seq, v)
+                _view.value = v
                 _turnTimer.value = TurnTimer.from(msg.turn)
             }
             is HostMsg.MoveRejected -> _rejections.tryEmit(msg.message)
