@@ -4,6 +4,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeSource
 
 /** Bump when a message changes in a way an older app cannot read. A joiner with another version is refused. */
 public const val PROTOCOL_VERSION: Int = 2
@@ -55,10 +58,13 @@ public sealed interface HostMsg {
     @SerialName("lobby")
     public data class LobbyUpdate(val lobby: Lobby) : HostMsg
 
-    /** The game as this seat may see it. [seq] grows by one with every change, so a client can drop stale views. */
+    /**
+     * The game as this seat may see it. [seq] grows by one with every change, so a client can drop stale views.
+     * [turn] is set while a player's turn clock runs (null for bots, a finished game or a room without a timer).
+     */
     @Serializable
     @SerialName("view")
-    public data class View(val seq: Int, val view: JsonElement) : HostMsg
+    public data class View(val seq: Int, val view: JsonElement, val turn: TurnInfo? = null) : HostMsg
 
     @Serializable
     @SerialName("rejected")
@@ -72,6 +78,13 @@ public sealed interface HostMsg {
     @SerialName("closed")
     public data class RoomClosed(val reason: CloseReason) : HostMsg
 }
+
+/**
+ * Whose turn clock is running and how much time was left when the host sent this. Remaining time, not a clock time,
+ * because the phones' clocks differ; the receiver counts down from when it arrived.
+ */
+@Serializable
+public data class TurnInfo(val seat: Int, val endsInMs: Long)
 
 @Serializable
 public enum class RefuseReason {
@@ -119,4 +132,15 @@ public object NearbyProtocol {
 
     // SerializationException is an IllegalArgumentException.
     private inline fun <T> decodeOrNull(block: () -> T): T? = try { block() } catch (_: IllegalArgumentException) { null }
+}
+
+/** A running turn clock as this phone sees it: whose turn, and when it runs out on this phone's own clock. */
+public data class TurnTimer(val seat: Int, val deadline: TimeSource.Monotonic.ValueTimeMark) {
+    /** Time left, never below zero; read it on each frame of a countdown. */
+    public val remaining: Duration get() = (-deadline.elapsedNow()).coerceAtLeast(Duration.ZERO)
+
+    internal companion object {
+        fun from(info: TurnInfo?): TurnTimer? =
+            info?.let { TurnTimer(it.seat, TimeSource.Monotonic.markNow() + it.endsInMs.milliseconds) }
+    }
 }
