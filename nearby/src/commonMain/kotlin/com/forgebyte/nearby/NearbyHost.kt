@@ -133,12 +133,16 @@ public class NearbyHost<S, M, V>(
 
     /** Ends the room for everyone, then stops the server. */
     public suspend fun leave() {
+        val t0 = TimeSource.Monotonic.markNow()
         act { hostLeave() }
         jobs.forEach { it.cancel() }
+        trace("host: leave: room closed sent (${t0.elapsedNow()})")
         // Let every socket send "room closed" before the server goes, or joiners would take it for a drop.
         val pending = lock.withLock { writers.toList() }
-        withTimeoutOrNull(FLUSH) { pending.joinAll() }
+        val flushed = withTimeoutOrNull(FLUSH) { pending.joinAll() } != null
+        trace("host: leave: ${pending.size} writers ${if (flushed) "flushed" else "NOT flushed"} (${t0.elapsedNow()})")
         stopServer?.invoke()
+        trace("host: leave: server stopped (${t0.elapsedNow()})")
     }
 
     private suspend fun serve(session: DefaultWebSocketServerSession) {
@@ -171,6 +175,7 @@ public class NearbyHost<S, M, V>(
             val first = withTimeoutOrNull(HELLO_TIMEOUT) { session.incoming.receiveCatching().getOrNull() }
             val hello = (first as? Frame.Binary)?.let { secure.open(it.data) }?.let(NearbyProtocol::decodeClient)
             if (hello !is ClientMsg.Hello) return
+            trace("host: $conn hello (token ${hello.reconnectToken != null}, code ${hello.roomSecret != null})")
             act { onMessage(conn, hello) }
             for (frame in session.incoming) {
                 // A frame that does not decrypt was changed, replayed or reordered: drop the connection.
@@ -180,6 +185,7 @@ public class NearbyHost<S, M, V>(
             }
         } finally {
             withContext(NonCancellable) {
+                trace("host: $conn closed")
                 act { onDisconnect(conn) }
                 lock.withLock {
                     outboxes.remove(conn)
