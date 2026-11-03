@@ -5,10 +5,14 @@ agp = "8.9.3"
 coroutines = "1.10.1"
 serialization = "1.8.0"
 ktor = "3.1.0"
+# Discovery (owner pick 2026-11-03): Android NSD, iOS Bonjour, JVM JmDNS. Built with Kotlin 2.3.20: fine on
+# Android with our 2.2.20, but its iOS klib needs a 2.3 compiler (1.0.4 is the last 2.1 build). Decide by week 3.
+dnssd = "1.1.2"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+dns-sd = { module = "com.appstractive:dns-sd-kt", version.ref = "dnssd" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 
 [plugins]
