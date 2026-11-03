@@ -31,6 +31,9 @@ import kotlin.time.Duration.Companion.seconds
 
 /** Owner, 2026-11-03: every frame after the key exchange is end-to-end encrypted between joiner and host. */
 class EncryptionLoopbackTest {
+    @get:org.junit.Rule
+    val traceRecorder = TraceRecorder()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val host = NearbyHost(FakeGame(cardsEach = 6), Harness.config(), scope)
 

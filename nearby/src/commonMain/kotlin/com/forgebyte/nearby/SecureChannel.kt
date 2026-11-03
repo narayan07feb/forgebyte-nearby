@@ -34,8 +34,12 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 /** Test hook: set to collect a timeline of connects and key exchanges (no keys, names or game data in it). */
 internal var traceSink: ((String) -> Unit)? = null
 
+/** Test hook for a whole-test recorder, independent of [traceSink] that single tests set and clear. */
+internal var traceRecorder: ((String) -> Unit)? = null
+
 internal fun trace(line: String) {
     traceSink?.invoke(line)
+    traceRecorder?.invoke(line)
 }
 
 /** Bump when the key exchange or frame format changes. */
