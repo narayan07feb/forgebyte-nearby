@@ -19,6 +19,8 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.serialization.json)
+            api(libs.kotlinx.coroutines.core)
+            implementation(libs.dns.sd)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
