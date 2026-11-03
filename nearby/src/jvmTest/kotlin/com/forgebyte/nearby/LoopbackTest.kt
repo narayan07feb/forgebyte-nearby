@@ -52,7 +52,7 @@ class LoopbackTest {
     @Test
     fun givenHostAndThreeClients_whenFullMatchWithADrop_thenEveryoneEndsOnTheHostsState() = runBlocking<Unit> {
         withTimeout(60.seconds) {
-            val port = host.open()
+            val port = host.open(bindHost = LOOPBACK)
             val clients = joined(port, 3)
             host.lobby.first { it.seats.size == 4 }
             clients.forEach { it.ready(true) }
@@ -96,7 +96,7 @@ class LoopbackTest {
     @Test
     fun givenClients_whenHostLeaves_thenEveryClientEndsHostLeft() = runBlocking<Unit> {
         withTimeout(20.seconds) {
-            val clients = joined(host.open(), 2)
+            val clients = joined(host.open(bindHost = LOOPBACK), 2)
             host.leave()
             clients.forEach {
                 assertEquals(ClientStatus.Ended(EndReason.HostLeft), it.status.first { s -> s is ClientStatus.Ended })
@@ -107,7 +107,7 @@ class LoopbackTest {
     @Test
     fun givenOlderApp_whenJoins_thenEndsRefusedWithVersionMismatch() = runBlocking<Unit> {
         withTimeout(20.seconds) {
-            val port = host.open()
+            val port = host.open(bindHost = LOOPBACK)
             val old = client(gameVersion = Harness.GAME_VERSION - 1)
             val lines = java.util.Collections.synchronizedList(mutableListOf<String>())
             val t0 = TimeSource.Monotonic.markNow()
@@ -124,7 +124,7 @@ class LoopbackTest {
     @Test
     fun givenKick_whenHostKicksClient_thenClientEndsKicked() = runBlocking<Unit> {
         withTimeout(20.seconds) {
-            val (c) = joined(host.open(), 1)
+            val (c) = joined(host.open(bindHost = LOOPBACK), 1)
             host.kick(1)
             assertEquals(ClientStatus.Ended(EndReason.Kicked), c.status.first { it is ClientStatus.Ended })
             host.lobby.first { it.seats.size == 1 }
@@ -137,7 +137,7 @@ class LoopbackTest {
     fun givenFoundRoom_whenHostAcceptsRequest_thenClientSeated() = runBlocking<Unit> {
         withTimeout(20.seconds) {
             val c = client()
-            c.requestJoin(ad(host.open()), "Asha")
+            c.requestJoin(ad(host.open(bindHost = LOOPBACK)), "Asha")
             c.status.first { it == ClientStatus.WaitingForHost }
             val request = host.joinRequests.first { it.isNotEmpty() }.single()
             assertEquals("Asha", request.name)
@@ -157,7 +157,7 @@ class LoopbackTest {
             traceSink = { seen += "${t0.elapsedNow().inWholeMilliseconds} $it" }
             scope.launch { c.status.collect { seen += it } }
             scope.launch { host.joinRequests.collect { seen += "requests $it" } }
-            c.requestJoin(ad(host.open()), "Asha")
+            c.requestJoin(ad(host.open(bindHost = LOOPBACK)), "Asha")
             host.declineJoin(host.joinRequests.first { it.isNotEmpty() }.single().id)
             val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } as ClientStatus.Ended }
                 ?: error("never ended; saw $seen")
@@ -182,11 +182,12 @@ class LoopbackTest {
     @Test
     fun givenHostNotUpYet_whenClientJoinsFirst_thenFirstConnectRetriesUntilHostOpens() = runBlocking<Unit> {
         withTimeout(20.seconds) {
-            val port = java.net.ServerSocket(0).use { it.localPort } // free now, host opens it a bit later
+            // free on loopback now; the host opens it a bit later
+            val port = java.net.ServerSocket(0, 0, java.net.InetAddress.getLoopbackAddress()).use { it.localPort }
             val c = client()
             c.requestJoin(ad(port), "Early") // a request: the room key does not exist before the host opens
             kotlinx.coroutines.delay(1_500)
-            host.open(port)
+            host.open(port, bindHost = LOOPBACK)
             host.joinRequests.first { it.isNotEmpty() }.single().let { host.acceptJoin(it.id) }
             assertEquals(ClientStatus.Connected, c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
         }
@@ -197,7 +198,7 @@ class LoopbackTest {
         val timed = NearbyHost(FakeGame(), Harness.config(turnTimeoutMs = 2_000), scope)
         try {
             withTimeout(20.seconds) {
-                val port = timed.open()
+                val port = timed.open(bindHost = LOOPBACK)
                 val c = client()
                 c.join(JoinCode("127.0.0.1", port, Harness.SECRET, timed.fingerprint!!), "Asha")
                 c.status.first { it == ClientStatus.Connected }
