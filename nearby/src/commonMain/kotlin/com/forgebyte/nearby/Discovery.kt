@@ -83,7 +83,9 @@ public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
 internal fun DiscoveredService.toRoomAd(gameId: String): RoomAd? {
     fun text(key: String) = txt[key]?.decodeToString()
     if (text(Txt.GAME) != gameId) return null
-    val address = addresses.firstOrNull() ?: host.takeIf { it.isNotBlank() } ?: return null
+    // Prefer IPv4: NSD and JmDNS can list a link-local IPv6 address first, which the join code cannot carry.
+    val address = addresses.firstOrNull { ':' !in it } ?: addresses.firstOrNull() ?: host.takeIf { it.isNotBlank() }
+        ?: return null
     return RoomAd(
         key = key,
         roomName = text(Txt.NAME) ?: name,
