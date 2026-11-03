@@ -27,3 +27,6 @@ class TraceRecorder : TestWatcher() {
         traceRecorder = null
     }
 }
+
+/** Test hosts listen on loopback only, so another local program's loopback port can never answer instead. */
+const val LOOPBACK = "127.0.0.1"
