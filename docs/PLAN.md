@@ -249,6 +249,13 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 - Host Wi-Fi off 8 s mid-match: reconnect to the same seat (pinned room key) and finish: PASS. Host leaves: HostLeft:
   PASS. No crash in the log; app uninstalled, Wi-Fi and rotation as found, lock freed.
 
+**2026-11-03, `host.leave()` timing (Mac, JVM).** One full-suite run spent 267 s in a test's `host.leave()` cleanup.
+Every leave step is now traced (room closed sent, writers flushed, server stopped) and `LeaveTimingTest` times 20
+leaves with two joiners mid-game per run: about 800 leaves over 41 full-suite runs, worst 20 ms; Ktor's CIO stop is
+bounded (grace 500 ms + timeout 1 s). **UNEXPLAINED**: the Mac was heavily loaded that day (one adb tap took 28 min
+at 12:15), so CPU starvation during a full-suite run is the working guess (ceo). The loopback cleanup is bounded to
+10 s and prints the leave timeline if it ever hangs; the sample host logs how long leave takes on a phone.
+
 ## Rules for this repo
 
 - No GitHub Actions; tests run locally (`./gradlew allTests` or the ci-local lane).

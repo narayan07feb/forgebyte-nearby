@@ -157,6 +157,7 @@ public class NearbyClient<M, V>(
                         val text = (frame as? Frame.Binary)?.let { secure.open(it.data) } ?: break
                         val msg = NearbyProtocol.decodeHost(text) ?: continue
                         if (msg is HostMsg.Welcome) {
+                            trace("joiner: welcome, seat ${msg.lobby.yourSeat}")
                             token = msg.reconnectToken
                             droppedAt = null
                         }
