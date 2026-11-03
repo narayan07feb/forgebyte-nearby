@@ -20,7 +20,7 @@ class JoinRequestTest {
         val out = h.request("a", name = "  Asha ")
 
         assertEquals(emptyList(), out, "nothing is sent until the host answers")
-        assertEquals(listOf(JoinRequest(1, "Asha")), room.joinRequests)
+        assertEquals(listOf(JoinRequest(1, "Asha", "")), room.joinRequests)
         assertEquals(1, room.seatCount)
     }
 

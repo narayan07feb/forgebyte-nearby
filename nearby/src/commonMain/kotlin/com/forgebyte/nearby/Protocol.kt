@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 
 /** Bump when a message changes in a way an older app cannot read. A joiner with another version is refused. */
-public const val PROTOCOL_VERSION: Int = 1
+public const val PROTOCOL_VERSION: Int = 2
 
 /** Messages a joiner sends to the host. Moves travel as JSON in the game's own move format. */
 @Serializable

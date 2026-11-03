@@ -32,16 +32,20 @@ public data class RoomAd(
         protocolVersion == PROTOCOL_VERSION && gameVersion == myGameVersion && seatsFree > 0
 }
 
-/** How to reach a room without discovery (QR code or a typed code), for routers and hotspots that block mDNS. */
-public data class JoinCode(val host: String, val port: Int, val secret: String) {
-    override fun toString(): String = "$host:$port:$secret"
+/**
+ * How to reach a room without discovery (QR code or a typed code), for routers and hotspots that block mDNS.
+ * [fingerprint] pins the room's encryption key, so a code join cannot be intercepted on the way.
+ */
+public data class JoinCode(val host: String, val port: Int, val secret: String, val fingerprint: String) {
+    override fun toString(): String = "$host:$port:$secret:$fingerprint"
 
     public companion object {
         public fun parse(text: String): JoinCode? {
             val parts = text.trim().split(':')
-            if (parts.size != 3 || parts[0].isBlank() || parts[2].isBlank()) return null
+            if (parts.size != 4 || parts.any { it.isBlank() }) return null
             val port = parts[1].toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
-            return JoinCode(parts[0], port, parts[2])
+            if (parts[3].length != 16 || parts[3].any { it.lowercaseChar() !in "0123456789abcdef" }) return null
+            return JoinCode(parts[0], port, parts[2], parts[3].lowercase())
         }
     }
 }

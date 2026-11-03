@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -31,9 +32,11 @@ class LoopbackTest {
     private fun client(gameVersion: Int = Harness.GAME_VERSION) =
         NearbyClient("fake", gameVersion, FakeMove.serializer(), FakeView.serializer(), scope)
 
+    private fun code(port: Int) = JoinCode("127.0.0.1", port, Harness.SECRET, host.fingerprint!!)
+
     private suspend fun joined(port: Int, n: Int) = (1..n).map { i ->
         client().also {
-            it.join(JoinCode("127.0.0.1", port, Harness.SECRET), "P$i")
+            it.join(code(port), "P$i")
             val s = it.status.first { s -> s == ClientStatus.Connected || s is ClientStatus.Ended }
             assertEquals(ClientStatus.Connected, s, "P$i")
         }
@@ -99,7 +102,7 @@ class LoopbackTest {
         withTimeout(20.seconds) {
             val port = host.open()
             val old = client(gameVersion = Harness.GAME_VERSION - 1)
-            old.join(JoinCode("127.0.0.1", port, Harness.SECRET), "Old")
+            old.join(code(port), "Old")
             val end = old.status.first { it is ClientStatus.Ended } as ClientStatus.Ended
             assertEquals(RefuseReason.GAME_VERSION_MISMATCH, (end.reason as EndReason.Refused).reason)
             assertEquals(1, host.lobby.value.seats.size)
@@ -137,9 +140,13 @@ class LoopbackTest {
     fun givenFoundRoom_whenHostDeclines_thenClientEndsDeclined() = runBlocking<Unit> {
         withTimeout(20.seconds) {
             val c = client()
+            val seen = java.util.Collections.synchronizedList(mutableListOf<Any>())
+            scope.launch { c.status.collect { seen += it } }
+            scope.launch { host.joinRequests.collect { seen += "requests $it" } }
             c.requestJoin(ad(host.open()), "Asha")
             host.declineJoin(host.joinRequests.first { it.isNotEmpty() }.single().id)
-            val end = c.status.first { it is ClientStatus.Ended } as ClientStatus.Ended
+            val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } as ClientStatus.Ended }
+                ?: error("never ended; saw $seen")
             assertEquals(RefuseReason.DECLINED, (end.reason as EndReason.Refused).reason)
             assertEquals(1, host.lobby.value.seats.size)
         }
@@ -151,7 +158,7 @@ class LoopbackTest {
             val c = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope,
                 firstConnectFor = 2.seconds)
             val started = TimeSource.Monotonic.markNow()
-            c.join(JoinCode("127.0.0.1", 1, Harness.SECRET), "Lost")
+            c.join(JoinCode("127.0.0.1", 1, Harness.SECRET, "0123456789abcdef"), "Lost")
             assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.first { it is ClientStatus.Ended })
             assertTrue(started.elapsedNow() >= 2.seconds, "kept trying for the first-connect time")
         }
@@ -162,18 +169,21 @@ class LoopbackTest {
         withTimeout(20.seconds) {
             val port = java.net.ServerSocket(0).use { it.localPort } // free now, host opens it a bit later
             val c = client()
-            c.join(JoinCode("127.0.0.1", port, Harness.SECRET), "Early")
+            c.requestJoin(ad(port), "Early") // a request: the room key does not exist before the host opens
             kotlinx.coroutines.delay(1_500)
             host.open(port)
+            host.joinRequests.first { it.isNotEmpty() }.single().let { host.acceptJoin(it.id) }
             assertEquals(ClientStatus.Connected, c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
         }
     }
 
     @Test
     fun givenJoinCode_whenParsed_thenRoundTripsAndJunkIsNull() {
-        val code = JoinCode("192.168.1.7", 40123, "abc")
+        val code = JoinCode("192.168.1.7", 40123, "abc", "0123456789abcdef")
         assertEquals(code, JoinCode.parse(code.toString()))
-        listOf("", "1.2.3.4", "1.2.3.4:0:x", "1.2.3.4:99999:x", ":5:x", "1.2.3.4:5:").forEach {
+        assertEquals(code, JoinCode.parse("192.168.1.7:40123:abc:0123456789ABCDEF"))
+        listOf("", "1.2.3.4", "1.2.3.4:5:x", "1.2.3.4:0:x:0123456789abcdef", "1.2.3.4:99999:x:0123456789abcdef",
+            ":5:x:0123456789abcdef", "1.2.3.4:5::0123456789abcdef", "1.2.3.4:5:x:0123", "1.2.3.4:5:x:0123456789abcdeg").forEach {
             assertEquals(null, JoinCode.parse(it), it)
         }
     }
