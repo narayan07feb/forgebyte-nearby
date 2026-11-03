@@ -42,7 +42,7 @@ Kotlin Multiplatform library (Android now, iOS later). No internet, no Supabase,
 1. **Discovery.** The host advertises `_forgebyte._tcp` on the local network (Android `NsdManager`, later iOS
    Bonjour) with TXT fields: game id (`uno`/`satti`), protocol version, room name, seats free. Joiners see a list of
    rooms nearby. Fallback when discovery is blocked (some routers, hotspots): the host screen shows a QR code and a
-   short code (IP + port + room secret); the joiner scans or types it.
+   short code (IP + port + room code); the joiner scans or types it. See "Joining" below.
 2. **Transport.** The host phone runs a small WebSocket server (Ktor server CIO, Ktor 3.1.0 like both games);
    joiners connect with the Ktor client. Same Wi-Fi, or the host's hotspot. Not Wi-Fi Direct (Android only).
 3. **Room.** Seats, names, bots, ready/start, leave, kick, a reconnect window (same seat comes back after a drop,
@@ -67,6 +67,40 @@ interface NearbyGame<State, Move, SeatView> {
    - Crazy Eights plugs in `engine` (`UnoRules`, `Move`, `SeatView`) and `ai` for bots.
    - Satti plugs in its `shared` rules (`PlayCardUseCase`, `RunBotTurnsUseCase`).
 5. **Not in scope.** Web (browsers cannot host or discover), Wi-Fi Direct, internet relay, accounts, chat.
+
+## Joining: the host approves each join (owner, 2026-11-03)
+
+- Rooms found nearby show in the list. Tapping one sends a join request with the player's name only; the host taps
+  Accept or Decline. A request the host does not answer in 60 seconds is refused, and at most 4 requests wait at a time
+  (more are refused straight away), so a flood cannot fill the host's screen.
+- The QR or typed code (IP, port, room code) joins at once without a request.
+- The mDNS TXT record never carries the room code: only game id, protocol version, game version, room name and seats
+  free. A unit test fails if anything else is added.
+- A seat that drops comes back with its reconnect token alone, whichever way it joined.
+- Pending requests are refused when the game starts, and told "room closed" when the host leaves.
+
+## Security: known residual risk
+
+Traffic is plain `ws://` on the local network. Another device on the same Wi-Fi that can capture packets (an open or
+shared café network, or anyone with the Wi-Fi password) could read:
+- the moves, names and public table;
+- each joiner's own hand, as the host sends it to that joiner (never another player's hand: the host sends each seat
+  only its own view);
+- a code-joiner's room code, and each seat's reconnect token. With a token, an attacker could take over that seat after
+  a drop (cheating in a casual game; nothing else is at stake: no accounts, money or personal data beyond a display
+  name).
+
+Would a per-room key be worth it for week 2? Not yet:
+- **TLS (`wss://`)** with a host-made certificate whose fingerprint is in the QR code. Ktor's CIO server has no TLS, so
+  this means Netty or Jetty on the phone (much bigger app, more battery), and request joins (no QR) would still trust
+  the first certificate they see. Cost: about a week plus app size. Not worth it.
+- **App-level encryption**: an X25519 key exchange on connect and AES-GCM per message, with a KMP crypto library (for
+  example cryptography-kotlin; on iOS it brings OpenSSL, a few MB). This stops passive reading on both join paths.
+  Active interception of a request join still works unless the two phones compare a short code. Cost: about 3 to 5
+  days with tests, little battery cost.
+- Recommendation: keep plain `ws://` for the closed tests, and revisit before production if Play Data safety (an
+  "encrypted in transit" answer) or the Families review for Satti asks for it. Then app-level encryption is the
+  cheaper choice.
 
 ## Permissions and store
 

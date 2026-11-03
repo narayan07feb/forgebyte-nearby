@@ -18,15 +18,21 @@ class Harness<S, M, V>(
         protocol: Int = PROTOCOL_VERSION,
         gameId: String = "fake",
         gameVersion: Int = GAME_VERSION,
-        secret: String = SECRET,
+        secret: String? = SECRET,
     ) = room.onMessage(conn, ClientMsg.Hello(protocol, gameId, gameVersion, name, secret, token))
+
+    /** A join request: a hello without the room code. */
+    fun request(conn: String, name: String = conn, gameVersion: Int = GAME_VERSION) =
+        hello(conn, name, secret = null, gameVersion = gameVersion)
 
     companion object {
         const val GAME_VERSION = 7
         const val SECRET = "s3cret"
         const val WINDOW = 30_000L
 
-        fun config(maxSeats: Int = 4, minSeats: Int = 2) = RoomConfig(
+        const val REQUEST_TIMEOUT = 20_000L
+
+        fun config(maxSeats: Int = 4, minSeats: Int = 2, maxPending: Int = 4) = RoomConfig(
             roomName = "Den",
             hostName = "Host",
             gameVersion = GAME_VERSION,
@@ -34,6 +40,8 @@ class Harness<S, M, V>(
             maxSeats = maxSeats,
             minSeats = minSeats,
             reconnectWindowMs = WINDOW,
+            requestTimeoutMs = REQUEST_TIMEOUT,
+            maxPendingRequests = maxPending,
         )
     }
 }

@@ -11,7 +11,10 @@ public const val PROTOCOL_VERSION: Int = 1
 /** Messages a joiner sends to the host. Moves travel as JSON in the game's own move format. */
 @Serializable
 public sealed interface ClientMsg {
-    /** First message on every connection. [reconnectToken] is set when coming back to a seat after a drop. */
+    /**
+     * First message on every connection. With [reconnectToken]: take back that seat after a drop. With [roomSecret]
+     * (from the QR or typed code): join at once. With neither: ask the host to let you in.
+     */
     @Serializable
     @SerialName("hello")
     public data class Hello(
@@ -19,7 +22,7 @@ public sealed interface ClientMsg {
         val gameId: String,
         val gameVersion: Int,
         val name: String,
-        val roomSecret: String,
+        val roomSecret: String? = null,
         val reconnectToken: String? = null,
     ) : ClientMsg
 
@@ -39,7 +42,7 @@ public sealed interface ClientMsg {
 /** Messages the host sends. Each one goes to one seat only. */
 @Serializable
 public sealed interface HostMsg {
-    /** Join accepted. Keep [reconnectToken] to get the same seat back after a drop; it changes on every welcome. */
+    /** Join accepted (by code, by the host, or a reconnect). Keep [reconnectToken] to get the same seat back after a drop; it changes on every welcome. */
     @Serializable
     @SerialName("welcome")
     public data class Welcome(val reconnectToken: String, val lobby: Lobby) : HostMsg
@@ -73,6 +76,7 @@ public sealed interface HostMsg {
 @Serializable
 public enum class RefuseReason {
     PROTOCOL_MISMATCH, WRONG_GAME, GAME_VERSION_MISMATCH, WRONG_SECRET, ROOM_FULL, GAME_STARTED, RECONNECT_EXPIRED,
+    DECLINED, REQUEST_TIMED_OUT, TOO_MANY_REQUESTS,
 }
 
 @Serializable

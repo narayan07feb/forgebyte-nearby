@@ -115,6 +115,35 @@ class LoopbackTest {
         }
     }
 
+    private fun ad(port: Int) = RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, "127.0.0.1", port)
+
+    @Test
+    fun givenFoundRoom_whenHostAcceptsRequest_thenClientSeated() = runBlocking<Unit> {
+        withTimeout(20.seconds) {
+            val c = client()
+            c.requestJoin(ad(host.open()), "Asha")
+            c.status.first { it == ClientStatus.WaitingForHost }
+            val request = host.joinRequests.first { it.isNotEmpty() }.single()
+            assertEquals("Asha", request.name)
+            host.acceptJoin(request.id)
+            c.status.first { it == ClientStatus.Connected }
+            assertEquals(1, c.lobby.value!!.yourSeat)
+            host.lobby.first { it.seats.size == 2 }
+        }
+    }
+
+    @Test
+    fun givenFoundRoom_whenHostDeclines_thenClientEndsDeclined() = runBlocking<Unit> {
+        withTimeout(20.seconds) {
+            val c = client()
+            c.requestJoin(ad(host.open()), "Asha")
+            host.declineJoin(host.joinRequests.first { it.isNotEmpty() }.single().id)
+            val end = c.status.first { it is ClientStatus.Ended } as ClientStatus.Ended
+            assertEquals(RefuseReason.DECLINED, (end.reason as EndReason.Refused).reason)
+            assertEquals(1, host.lobby.value.seats.size)
+        }
+    }
+
     @Test
     fun givenNoHost_whenJoins_thenEndsUnreachable() = runBlocking<Unit> {
         withTimeout(20.seconds) {
