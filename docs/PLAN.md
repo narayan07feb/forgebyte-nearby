@@ -93,6 +93,22 @@ interface NearbyGame<State, Move, SeatView> {
 - **Whose turn** comes from `NearbyGame.currentSeat(state, seatCount)`. Its default asks `botMove` for every seat
   (works for any adapter, but runs the bot up to N times per change); games should override it with a cheap lookup
   (ceo note, 2026-11-03).
+- **Off-turn bot moves** (ceo, 2026-11-03, v0.3.1): `NearbyGame.nextBotMove(state, botSeats, seatCount)` returns the
+  next move any bot wants, on or off turn (Crazy Eights: catch an uncalled last card, jump in); its default plays only
+  the current seat, so Satti is unchanged; uno overrides it with its own `Bots.nextMove`. The room asks once after every
+  applied move and plays the answer `botDelayMs` later without asking the AI again; any move landing first (a human's
+  catch, the turn timer's auto-move, another bot) replaces the plan. In instant mode (0 ms) bots loop until none wants
+  to move, capped at 10 000 moves (the cap is traced and stops the loop; it never throws or ends the room).
+- **Fairness:** a human who acts within `botDelayMs` of the state that allows a catch wins; ties go by arrival at the
+  host. The loser's move carries the seq of the view it was made on (`ClientMsg.Move.seenSeq`, optional), so the room
+  answers "Too late, another player already did that." and sends the table as it is now, instead of the game's
+  "illegal move" text. Joiners carry their network delay (about 25 to 50 ms) against the host's own player; a separate
+  off-turn delay waits until testers ask.
+- **Turn clock with off-turn moves:** the human whose turn it is keeps their deadline until the turn moves to another
+  seat or they move themselves; an off-turn bot catch does not eat or reset it; a jump-in that takes the turn starts
+  the next human's clock.
+- **Takeover is not final:** a seat a bot plays after the reconnect window is in `botSeats`, and the player gets it back
+  the moment they return with their token (any bot plan for it is dropped). Leaving or being kicked mid-game is final.
 - **Wire:** compatible with v0.2.0 (same protocol version; `View.turn` is optional and ignored by v0.2.0 joiners, which
   then show no countdown). The host wakes exactly when the next bot move or deadline is due (`Room.nextWakeAt`).
 
