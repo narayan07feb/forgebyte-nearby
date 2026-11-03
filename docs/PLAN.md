@@ -256,6 +256,19 @@ bounded (grace 500 ms + timeout 1 s). **UNEXPLAINED**: the Mac was heavily loade
 at 12:15), so CPU starvation during a full-suite run is the working guess (ceo). The loopback cleanup is bounded to
 10 s and prints the leave timeline if it ever hangs; the sample host logs how long leave takes on a phone.
 
+**2026-11-03, first-connect flake on the Mac: root cause.** The trace recorder caught a test client getting HTTP 404
+from `127.0.0.1:<port>`: a JetBrains process listened on loopback at the same random port our host had bound on
+`0.0.0.0`, and macOS routes a loopback dial to the more specific listener. About 1 full-suite run in 20 collided.
+Fixed in the tests: `NearbyHost.open(port, bindHost)` and test hosts bind `127.0.0.1`. Not a phone risk on Android
+(joiners dial the host's Wi-Fi IP, and Linux refuses a specific-IP bind on a port held by `0.0.0.0`); iOS follows BSD
+rules like macOS, so recheck in week 3.
+
+**Orphan seat (evidence, 2026-11-03).** `CutBeforeWelcomeTest` cuts the first socket after the host seated the
+joiner and before the Welcome arrives: the joiner retries without a token and is seated again, leaving
+`[Host, Asha (offline), Asha]`; the game cannot start until the reconnect window frees the ghost. Same for a join
+request. Fix: a join id kept across retries until the Welcome (next PR). One earlier failure ("a joiner got no view
+after start", run 12) had no trace and stays **UNEXPLAINED**.
+
 ## Rules for this repo
 
 - No GitHub Actions; tests run locally (`./gradlew allTests` or the ci-local lane).
