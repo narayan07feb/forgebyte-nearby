@@ -114,6 +114,8 @@ public class Room<S, M, V>(
 
     public fun onMessage(conn: String, msg: ClientMsg): List<RoomOutput> = step {
         val seat = seatOf(conn)
+        // Any message after the Hello proves this connection got its Welcome: the join id is no longer needed.
+        if (seat != null && msg !is ClientMsg.Hello) seats[seat].joinId = null
         when {
             msg is ClientMsg.Hello -> if (seat == null && pending.none { it.conn == conn }) hello(conn, msg)
             seat == null -> Unit // nothing but hello before a seat is given
@@ -215,6 +217,7 @@ public class Room<S, M, V>(
         if (h.reconnectToken != null) {
             val seat = seats.indexOfFirst { t -> t.token?.let { sameSecret(it, h.reconnectToken) } == true }
             if (seat < 0) return refuse(conn, RefuseReason.RECONNECT_EXPIRED, "Your seat is gone. Join again.")
+            seats[seat].joinId = null // a token means the Welcome arrived
             return reseat(seat, conn)
         }
         if (h.joinId != null) {
@@ -243,6 +246,10 @@ public class Room<S, M, V>(
 
     /** The seat's player is back on [conn] (with their token, or their join id before any Welcome). */
     private fun reseat(seat: Int, conn: String) {
+        // A bot seat that was not taken over after the reconnect window was left or kicked: nobody gets it back.
+        if (seats[seat].kind == SeatKind.BOT && !seats[seat].takenOver) {
+            return refuse(conn, RefuseReason.RECONNECT_EXPIRED, "Your seat is gone. Join again.")
+        }
         seats[seat].conn?.takeIf { it != conn }?.let { out += RoomOutput.Close(it) } // a half-open old socket
         seats[seat].conn = conn
         seats[seat].droppedAt = null
@@ -324,7 +331,10 @@ public class Room<S, M, V>(
         seats[seat].apply {
             kind = SeatKind.BOT
             takenOver = keepToken
-            if (!keepToken) token = null
+            if (!keepToken) {
+                token = null
+                joinId = null
+            }
             conn = null
             droppedAt = null
             ready = true
