@@ -38,11 +38,14 @@ v0.2.0 or later). The host phone is the referee: it keeps the full state, applie
 Mark every seat `isHuman = true` so `applyMove` never switches to `BotThinking`; the room decides who is a bot.
 `GameEngine` logs every call through `AppLogger`; fine on the host.
 
-## Gaps in the library (to decide)
+## Bot pacing and turn timer (owner, 2026-11-03; v0.3.0, PR #8)
 
-- **Bot pacing.** Room bots move inside the same call, at once. Satti's own bots "think" 1.2 s, so in a nearby game
-  several bot moves would land as one jump. Proposal: `NearbyHost` plays bots one move at a time with a configurable
-  delay (default about 1 s).
-- **Turn timer.** A connected player who never moves blocks the game (only a drop reaches the reconnect window).
-  Proposal: optional `RoomConfig.turnTimeoutMs`; when it runs out the host plays that seat's `botMove` (a pass in
-  Satti), like the online games' turn timer.
+- **Bot pacing:** the room plays bots one move at a time, `RoomConfig.botDelayMs` apart (default 1 s; 0 = all at
+  once). Do not add delays in the adapter.
+- **Turn timer:** `RoomConfig.turnTimeoutMs` (default 30 s; 0 = off). When a seat's time runs out the host plays that
+  seat's `botMove` for it, so `botMove` must give a sensible move for a human seat too (Satti: a card or a pass;
+  Crazy Eights: a bot move or a draw).
+- **Countdown:** show `NearbyHost.turnTimer` / `NearbyClient.turnTimer` (`seat`, `remaining`); read `remaining` on
+  each frame. No ticking messages are sent.
+- **Whose turn:** today the room finds it as the seat whose `botMove` is non-null (rule 4 above). That runs the bot
+  for every seat after each change; a cheaper, explicit hook is planned (ceo note, 2026-11-03).
