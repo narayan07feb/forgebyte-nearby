@@ -1,0 +1,190 @@
+package com.forgebyte.nearby
+
+import com.appstractive.dnssd.publishService
+import io.ktor.server.application.install
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.DefaultWebSocketServerSession
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.random.Random
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
+
+/**
+ * The host phone: runs a [Room] behind a Ktor WebSocket server and plays seat 0 itself. Joiners connect with
+ * [NearbyClient]. Every room call runs under one lock, so the room sees one event at a time.
+ */
+public class NearbyHost<S, M, V>(
+    private val game: NearbyGame<S, M, V>,
+    private val config: RoomConfig,
+    private val scope: CoroutineScope,
+) {
+    private val started = TimeSource.Monotonic.markNow()
+    private val room = Room(game, config, clock = { started.elapsedNow().inWholeMilliseconds })
+    private val lock = Mutex()
+    private val outboxes = mutableMapOf<String, Channel<String>>()
+    private val writers = mutableSetOf<Job>()
+    private var nextConn = 0
+    private val jobs = mutableListOf<Job>()
+    private var stopServer: (suspend () -> Unit)? = null
+
+    private val _lobby = MutableStateFlow(room.hostLobby)
+    public val lobby: StateFlow<Lobby> = _lobby.asStateFlow()
+
+    private val _view = MutableStateFlow<V?>(null)
+    public val view: StateFlow<V?> = _view.asStateFlow()
+
+    private val _canStart = MutableStateFlow(false)
+    public val canStart: StateFlow<Boolean> = _canStart.asStateFlow()
+
+    private val _rejections = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** Why the host's own move was refused. */
+    public val rejections: SharedFlow<String> = _rejections.asSharedFlow()
+
+    /** Starts the server on [port] (0 picks a free one) and returns the port it listens on. */
+    public suspend fun open(port: Int = 0): Int {
+        val server = embeddedServer(CIO, port = port, host = "0.0.0.0") {
+            install(WebSockets) {
+                pingPeriodMillis = PING.inWholeMilliseconds
+                timeoutMillis = PING.inWholeMilliseconds * 3 // a phone that went quiet this long is treated as dropped
+                maxFrameSize = MAX_FRAME
+            }
+            routing { webSocket(WS_PATH) { serve(this) } }
+        }
+        server.startSuspend(wait = false)
+        stopServer = { server.stopSuspend(500, 1_000) }
+        jobs += scope.launch {
+            while (isActive) {
+                delay(1_000)
+                act { tick() }
+            }
+        }
+        return server.engine.resolvedConnectors().first().port
+    }
+
+    /** What a joiner types or scans when discovery does not work on this network. */
+    public fun joinCodes(port: Int): List<JoinCode> = localAddresses().map { JoinCode(it, port, config.roomSecret) }
+
+    /**
+     * Advertises the room on the local network until the calling coroutine is cancelled, updating the free-seat
+     * count as it changes. An [open] room carries its secret, so a joiner can tap it in the list; otherwise the
+     * joiner needs the join code.
+     */
+    public suspend fun advertise(port: Int, open: Boolean = true) {
+        lobby.map { it.phase to config.maxSeats - it.seats.size }.distinctUntilChanged().collectLatest { (phase, free) ->
+            publishService(SERVICE_TYPE, config.roomName.take(MAX_ROOM_NAME)) {
+                this.port = port
+                txt = buildMap {
+                    put(Txt.GAME, game.gameId)
+                    put(Txt.PROTOCOL, PROTOCOL_VERSION.toString())
+                    put(Txt.GAME_VERSION, config.gameVersion.toString())
+                    put(Txt.NAME, config.roomName.take(MAX_ROOM_NAME))
+                    put(Txt.FREE, (if (phase == Phase.LOBBY) free else 0).toString())
+                    if (open) put(Txt.SECRET, config.roomSecret)
+                }
+            }
+        }
+    }
+
+    public suspend fun addBot(): Unit = act { addBot() }
+    public suspend fun kick(seat: Int): Unit = act { kick(seat) }
+    public suspend fun startGame(seed: Long = Random.nextLong()): Unit = act { start(seed) }
+    public suspend fun move(move: M): Unit = act { hostMove(move) }
+
+    /** Ends the room for everyone, then stops the server. */
+    public suspend fun leave() {
+        act { hostLeave() }
+        jobs.forEach { it.cancel() }
+        // Let every socket send "room closed" before the server goes, or joiners would take it for a drop.
+        val pending = lock.withLock { writers.toList() }
+        withTimeoutOrNull(FLUSH) { pending.joinAll() }
+        stopServer?.invoke()
+    }
+
+    private suspend fun serve(session: DefaultWebSocketServerSession) {
+        val outbox = Channel<String>(OUTBOX)
+        val conn = lock.withLock { "c${nextConn++}".also { outboxes[it] = outbox } }
+        // The writer sends what the room queued, then closes the socket once the room closed the outbox.
+        val writer = session.launch {
+            for (text in outbox) session.send(Frame.Text(text))
+            session.flush() // else Ktor can drop the last frames (Refused, Kicked, RoomClosed) when the handler ends
+            session.close()
+        }
+        lock.withLock { writers += writer }
+        try {
+            val first = withTimeoutOrNull(HELLO_TIMEOUT) { session.incoming.receiveCatching().getOrNull() }
+            val hello = (first as? Frame.Text)?.let { NearbyProtocol.decodeClient(it.readText()) }
+            if (hello !is ClientMsg.Hello) return
+            act { onMessage(conn, hello) }
+            for (frame in session.incoming) {
+                val msg = (frame as? Frame.Text)?.let { NearbyProtocol.decodeClient(it.readText()) } ?: continue
+                act { onMessage(conn, msg) }
+            }
+        } finally {
+            withContext(NonCancellable) {
+                act { onDisconnect(conn) }
+                lock.withLock { outboxes.remove(conn) }
+                outbox.close()
+                writer.join()
+                lock.withLock { writers -= writer }
+            }
+        }
+    }
+
+    private suspend fun act(call: Room<S, M, V>.() -> List<RoomOutput>): Unit = lock.withLock {
+        for (out in room.call()) when (out) {
+            is RoomOutput.Send -> if (out.conn == HOST_CONN) {
+                showOnHost(out.msg)
+            } else {
+                // A joiner that cannot keep up is dropped; it comes back through the reconnect window.
+                outboxes[out.conn]?.let { if (it.trySend(NearbyProtocol.encode(out.msg)).isFailure) it.close() }
+            }
+            is RoomOutput.Close -> outboxes.remove(out.conn)?.close()
+        }
+        _canStart.value = room.canStart
+    }
+
+    private fun showOnHost(msg: HostMsg) {
+        when (msg) {
+            is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
+            is HostMsg.View -> _view.value = NearbyProtocol.json.decodeFromJsonElement(game.viewSerializer, msg.view)
+            is HostMsg.MoveRejected -> _rejections.tryEmit(msg.message)
+            else -> Unit
+        }
+    }
+
+    private companion object {
+        val PING = 5.seconds
+        val HELLO_TIMEOUT = 10.seconds
+        val FLUSH = 1.seconds
+        const val MAX_FRAME = 64L * 1024
+        const val OUTBOX = 64
+        const val MAX_ROOM_NAME = 40
+    }
+}
