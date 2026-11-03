@@ -90,8 +90,9 @@ interface NearbyGame<State, Move, SeatView> {
 - **Countdown:** each `View` carries `turn = (seat, endsInMs)`, the time left when the host sent it (not a clock time,
   since the phones' clocks differ); `NearbyHost.turnTimer` and `NearbyClient.turnTimer` turn it into a local deadline.
   No ticking messages.
-- **Whose turn** comes from `botMove`: the seat whose `botMove` is non-null (docs/ADAPTERS.md rule 4); no change to
-  `NearbyGame`.
+- **Whose turn** comes from `NearbyGame.currentSeat(state, seatCount)`. Its default asks `botMove` for every seat
+  (works for any adapter, but runs the bot up to N times per change); games should override it with a cheap lookup
+  (ceo note, 2026-11-03).
 - **Wire:** compatible with v0.2.0 (same protocol version; `View.turn` is optional and ignored by v0.2.0 joiners, which
   then show no countdown). The host wakes exactly when the next bot move or deadline is due (`Room.nextWakeAt`).
 

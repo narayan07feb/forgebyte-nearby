@@ -310,8 +310,7 @@ public class Room<S, M, V>(
         turnDeadline = null
         val s = state ?: return
         if (phase != Phase.PLAYING || game.isOver(s)) return
-        // botMove is non-null only for the seat that has something to do now (docs/ADAPTERS.md rule 4).
-        val seat = seats.indices.firstOrNull { game.botMove(s, it) != null } ?: return
+        val seat = game.currentSeat(s, seats.size)?.takeIf { it in seats.indices } ?: return
         when {
             seats[seat].kind == SeatKind.BOT -> botAt = clock() + config.botDelayMs
             config.turnTimeoutMs > 0 -> {
@@ -327,7 +326,7 @@ public class Room<S, M, V>(
         val s = state ?: return
         if (phase != Phase.PLAYING) return
         val seat = when {
-            botAt?.let { now >= it } == true -> seats.indices.firstOrNull { seats[it].kind == SeatKind.BOT && game.botMove(s, it) != null }
+            botAt?.let { now >= it } == true -> game.currentSeat(s, seats.size)?.takeIf { it in seats.indices && seats[it].kind == SeatKind.BOT }
             turnDeadline?.let { now >= it } == true -> turnSeat
             else -> return
         }
