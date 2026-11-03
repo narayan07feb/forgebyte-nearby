@@ -28,6 +28,8 @@ import kotlin.time.TimeSource
 
 public sealed interface ClientStatus {
     public data object Connecting : ClientStatus
+    /** A join request was sent; the host has not answered yet. */
+    public data object WaitingForHost : ClientStatus
     public data object Connected : ClientStatus
     /** The connection dropped; trying to get the same seat back. */
     public data object Reconnecting : ClientStatus
@@ -73,21 +75,28 @@ public class NearbyClient<M, V>(
     private val _rejections = MutableSharedFlow<String>(extraBufferCapacity = 8)
     public val rejections: SharedFlow<String> = _rejections.asSharedFlow()
 
+    /** Joins with the room code from the QR or typed code: no host approval needed. */
+    public fun join(code: JoinCode, name: String): Job = connect(code.host, code.port, code.secret, name)
+
+    /** Asks a room found nearby to let us in; [status] is [ClientStatus.WaitingForHost] until the host answers. */
+    public fun requestJoin(room: RoomAd, name: String): Job = connect(room.host, room.port, secret = null, name)
+
     /**
      * Connects and keeps the seat: after a drop it reconnects with the seat's token every second, until the host
      * answers or [RETRY_FOR] passes. The host decides whether the seat is still there.
      */
-    public fun join(code: JoinCode, name: String): Job = scope.launch {
+    private fun connect(host: String, port: Int, secret: String?, name: String): Job = scope.launch {
         var token: String? = null
         var droppedAt: TimeSource.Monotonic.ValueTimeMark? = null
         while (true) {
             var end: EndReason? = null
             try {
-                http.webSocket(host = code.host, port = code.port, path = WS_PATH) {
+                http.webSocket(host = host, port = port, path = WS_PATH) {
                     session = this
-                    send(Frame.Text(NearbyProtocol.encode(
-                        ClientMsg.Hello(PROTOCOL_VERSION, gameId, gameVersion, name, code.secret, token),
-                    )))
+                    // A reconnect proves the seat with its token alone, so a seat that joined by request comes back too.
+                    val hello = ClientMsg.Hello(PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token)
+                    send(Frame.Text(NearbyProtocol.encode(hello)))
+                    if (hello.roomSecret == null && token == null) _status.value = ClientStatus.WaitingForHost
                     for (frame in incoming) {
                         val msg = (frame as? Frame.Text)?.let { NearbyProtocol.decodeHost(it.readText()) } ?: continue
                         if (msg is HostMsg.Welcome) {
