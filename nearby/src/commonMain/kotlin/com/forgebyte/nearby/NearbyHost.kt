@@ -47,7 +47,7 @@ public class NearbyHost<S, M, V>(
 ) {
     private val started = TimeSource.Monotonic.markNow()
     private val checkCodes = mutableMapOf<String, String>() // read by the room under the lock
-    private val room = Room(game, config, clock = { started.elapsedNow().inWholeMilliseconds }, checkCodeOf = { checkCodes[it] ?: "" })
+    private val room = Room(game, config, clock = ::now, checkCodeOf = { checkCodes[it] ?: "" })
     private val lock = Mutex()
     private val outboxes = mutableMapOf<String, Channel<String>>()
     private var hostKey: HostKey? = null
@@ -70,6 +70,10 @@ public class NearbyHost<S, M, V>(
     /** People asking to join; answer each with [acceptJoin] or [declineJoin]. */
     public val joinRequests: StateFlow<List<JoinRequest>> = _joinRequests.asStateFlow()
 
+    private val _turnTimer = MutableStateFlow<TurnTimer?>(null)
+    /** The running turn clock (any seat's), for the host's countdown; null while bots play or with no timer. */
+    public val turnTimer: StateFlow<TurnTimer?> = _turnTimer.asStateFlow()
+
     private val _rejections = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Why the host's own move was refused. */
     public val rejections: SharedFlow<String> = _rejections.asSharedFlow()
@@ -87,9 +91,11 @@ public class NearbyHost<S, M, V>(
         }
         server.startSuspend(wait = false)
         stopServer = { server.stopSuspend(500, 1_000) }
+        // Wake exactly when the room next has something due (a paced bot move, a turn deadline), at least every second.
         jobs += scope.launch {
             while (isActive) {
-                delay(1_000)
+                val wait = lock.withLock { room.nextWakeAt?.minus(now()) } ?: 1_000
+                delay(wait.coerceIn(5, 1_000))
                 act { tick() }
             }
         }
@@ -184,6 +190,8 @@ public class NearbyHost<S, M, V>(
         }
     }
 
+    private fun now() = started.elapsedNow().inWholeMilliseconds
+
     private suspend fun act(call: Room<S, M, V>.() -> List<RoomOutput>): Unit = lock.withLock {
         for (out in room.call()) when (out) {
             is RoomOutput.Send -> if (out.conn == HOST_CONN) {
@@ -201,7 +209,10 @@ public class NearbyHost<S, M, V>(
     private fun showOnHost(msg: HostMsg) {
         when (msg) {
             is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
-            is HostMsg.View -> _view.value = NearbyProtocol.json.decodeFromJsonElement(game.viewSerializer, msg.view)
+            is HostMsg.View -> {
+                _view.value = NearbyProtocol.json.decodeFromJsonElement(game.viewSerializer, msg.view)
+                _turnTimer.value = TurnTimer.from(msg.turn)
+            }
             is HostMsg.MoveRejected -> _rejections.tryEmit(msg.message)
             else -> Unit
         }

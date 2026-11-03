@@ -185,6 +185,31 @@ class LoopbackTest {
     }
 
     @Test
+    fun givenTurnTimer_whenNobodyMoves_thenJoinerSeesCountdownAndTheTurnPassesOnItsOwn() = runBlocking<Unit> {
+        val timed = NearbyHost(FakeGame(), Harness.config(turnTimeoutMs = 2_000), scope)
+        try {
+            withTimeout(20.seconds) {
+                val port = timed.open()
+                val c = client()
+                c.join(JoinCode("127.0.0.1", port, Harness.SECRET, timed.fingerprint!!), "Asha")
+                c.status.first { it == ClientStatus.Connected }
+                c.ready(true)
+                timed.canStart.first { it }
+                timed.startGame(seed = 3) // seat 0, the host, moves first and does nothing
+                val first = c.turnTimer.first { it != null }!!
+                assertEquals(0, first.seat)
+                assertTrue(first.remaining in 1.seconds..2.seconds, "about 2 s left: ${first.remaining}")
+                assertEquals(0, timed.turnTimer.value!!.seat, "the host sees the same clock")
+                val next = c.turnTimer.first { it?.seat == 1 }!!
+                assertTrue(next.remaining > 1.seconds, "seat 1 got a fresh clock: ${next.remaining}")
+                assertEquals(1, c.view.value!!.turn, "the host's move was played for it")
+            }
+        } finally {
+            timed.leave()
+        }
+    }
+
+    @Test
     fun givenJoinCode_whenParsed_thenRoundTripsAndJunkIsNull() {
         val code = JoinCode("192.168.1.7", 40123, "abc", "0123456789abcdef")
         assertEquals(code, JoinCode.parse(code.toString()))
