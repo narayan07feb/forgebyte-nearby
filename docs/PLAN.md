@@ -140,6 +140,24 @@ Would a per-room key be worth it for week 2? Not yet:
 5. **Before release**: usual Lava checks (no crash/ANR in the buffer, 20-minute session battery and temperature),
    then the closed tests.
 
+## Device test log
+
+**2026-11-03, test 4b: Lava (Android 16) hosts with `sample-host`, the Mac joins with `mac-client`, same Wi-Fi
+(plain ws://, before encryption).**
+- Discovery from the Mac (JmDNS): 4 of 4 runs found the room in 2.2 to 2.8 s, then join request, host accept and a
+  full match: PASS. One earlier JmDNS run resolved only a link-local IPv6 address (fixed: rooms list only with an IPv4
+  address or host name, and resolve again), and one found nothing in 30 s while macOS `dns-sd -B` saw the room, so
+  JmDNS on the Mac is a test-tool weakness; phones use NSD.
+- Join code: PASS, joined in 0.8 s.
+- Move round trip (Mac move to the host's next view): p50 32 to 49 ms, p95 52 to 104 ms per run; worst single moves
+  203 ms and 347 ms. Target is 150 ms, so most moves meet it. The slow ones look like Wi-Fi power save on the phone;
+  next step is a Wi-Fi low-latency lock on the host during a match, then measure again.
+- First contact: the Mac got "Host is down" until the phone itself sent traffic (Wi-Fi dozing). The first connect now
+  retries for 10 s.
+- Host Wi-Fi off for 8 s mid-match, then on: the joiner reconnected to the same seat and finished: PASS.
+- Host leaves mid-match: the joiner ended at once with HostLeft: PASS.
+- No crash from our app in the phone log. The test app was uninstalled, Wi-Fi and rotation were left as found.
+
 ## Rules for this repo
 
 - No GitHub Actions; tests run locally (`./gradlew allTests` or the ci-local lane).
