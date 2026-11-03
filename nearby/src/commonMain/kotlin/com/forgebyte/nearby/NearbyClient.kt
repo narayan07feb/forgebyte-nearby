@@ -116,6 +116,7 @@ public class NearbyClient<M, V>(
      */
     private fun connect(host: String, port: Int, secret: String?, fingerprint: String?, name: String): Job = scope.launch {
         val started = TimeSource.Monotonic.markNow()
+        val joinId = secureRandomBytes(16).toHex() // one per join, kept across retries until the Welcome
         var pinned = fingerprint // after the first join, every reconnect must reach the same room key
         var token: String? = null
         var droppedAt: TimeSource.Monotonic.ValueTimeMark? = null
@@ -149,7 +150,10 @@ public class NearbyClient<M, V>(
                     _checkCode.value = secure.checkCode
                     link = Link(this, secure)
                     // A reconnect proves the seat with its token alone, so a seat that joined by request comes back too.
-                    val hello = ClientMsg.Hello(PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token)
+                    val hello = ClientMsg.Hello(
+                        PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token,
+                        joinId = joinId.takeIf { token == null },
+                    )
                     send(hello)
                     if (hello.roomSecret == null && token == null) _status.value = ClientStatus.WaitingForHost
                     for (frame in incoming) {
@@ -157,6 +161,7 @@ public class NearbyClient<M, V>(
                         val text = (frame as? Frame.Binary)?.let { secure.open(it.data) } ?: break
                         val msg = NearbyProtocol.decodeHost(text) ?: continue
                         if (msg is HostMsg.Welcome) {
+                            trace("joiner: welcome, seat ${msg.lobby.yourSeat}")
                             token = msg.reconnectToken
                             droppedAt = null
                         }
@@ -198,7 +203,7 @@ public class NearbyClient<M, V>(
     public suspend fun ready(ready: Boolean): Boolean = send(ClientMsg.Ready(ready))
 
     public suspend fun move(move: M): Boolean =
-        send(ClientMsg.Move(NearbyProtocol.json.encodeToJsonElement(moveSerializer, move)))
+        send(ClientMsg.Move(NearbyProtocol.json.encodeToJsonElement(moveSerializer, move), seenSeq = lastSeq))
 
     public suspend fun leave() {
         leaving = true

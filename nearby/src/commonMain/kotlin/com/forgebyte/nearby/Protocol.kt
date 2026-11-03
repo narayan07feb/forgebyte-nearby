@@ -27,15 +27,25 @@ public sealed interface ClientMsg {
         val name: String,
         val roomSecret: String? = null,
         val reconnectToken: String? = null,
+        /**
+         * Random, made once per join and kept across retries until the Welcome: a retry whose first socket died
+         * after the host seated it (or queued its request) gets the same seat or request back, not a second one.
+         * Optional: older joiners do not send it.
+         */
+        val joinId: String? = null,
     ) : ClientMsg
 
     @Serializable
     @SerialName("ready")
     public data class Ready(val ready: Boolean) : ClientMsg
 
+    /**
+     * [seenSeq] is the seq of the view the player acted on, so a move that lost a race can be told apart from an
+     * illegal one ("Too late, another player already did that"). Optional: older joiners do not send it.
+     */
     @Serializable
     @SerialName("move")
-    public data class Move(val move: JsonElement) : ClientMsg
+    public data class Move(val move: JsonElement, val seenSeq: Int? = null) : ClientMsg
 
     @Serializable
     @SerialName("leave")

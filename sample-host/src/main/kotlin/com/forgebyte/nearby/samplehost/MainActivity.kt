@@ -82,7 +82,11 @@ class MainActivity : Activity() {
     /** `adb shell am start -n com.forgebyte.nearby.samplehost/.MainActivity --ez leave true` ends the room. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.getBooleanExtra("leave", false)) scope.launch { host.leave(); say("host left the room") }
+        if (intent.getBooleanExtra("leave", false)) scope.launch {
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            host.leave()
+            say("host left the room in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
+        }
     }
 
     override fun onDestroy() {

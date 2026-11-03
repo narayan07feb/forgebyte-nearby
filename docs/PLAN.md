@@ -93,6 +93,22 @@ interface NearbyGame<State, Move, SeatView> {
 - **Whose turn** comes from `NearbyGame.currentSeat(state, seatCount)`. Its default asks `botMove` for every seat
   (works for any adapter, but runs the bot up to N times per change); games should override it with a cheap lookup
   (ceo note, 2026-11-03).
+- **Off-turn bot moves** (ceo, 2026-11-03, v0.3.1): `NearbyGame.nextBotMove(state, botSeats, seatCount)` returns the
+  next move any bot wants, on or off turn (Crazy Eights: catch an uncalled last card, jump in); its default plays only
+  the current seat, so Satti is unchanged; uno overrides it with its own `Bots.nextMove`. The room asks once after every
+  applied move and plays the answer `botDelayMs` later without asking the AI again; any move landing first (a human's
+  catch, the turn timer's auto-move, another bot) replaces the plan. In instant mode (0 ms) bots loop until none wants
+  to move, capped at 10 000 moves (the cap is traced and stops the loop; it never throws or ends the room).
+- **Fairness:** a human who acts within `botDelayMs` of the state that allows a catch wins; ties go by arrival at the
+  host. The loser's move carries the seq of the view it was made on (`ClientMsg.Move.seenSeq`, optional), so the room
+  answers "Too late, another player already did that." and sends the table as it is now, instead of the game's
+  "illegal move" text. Joiners carry their network delay (about 25 to 50 ms) against the host's own player; a separate
+  off-turn delay waits until testers ask.
+- **Turn clock with off-turn moves:** the human whose turn it is keeps their deadline until the turn moves to another
+  seat or they move themselves; an off-turn bot catch does not eat or reset it; a jump-in that takes the turn starts
+  the next human's clock.
+- **Takeover is not final:** a seat a bot plays after the reconnect window is in `botSeats`, and the player gets it back
+  the moment they return with their token (any bot plan for it is dropped). Leaving or being kicked mid-game is final.
 - **Wire:** compatible with v0.2.0 (same protocol version; `View.turn` is optional and ignored by v0.2.0 joiners, which
   then show no countdown). The host wakes exactly when the next bot move or deadline is due (`Room.nextWakeAt`).
 
@@ -240,6 +256,32 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
   61 to 69 ms.
 - Host Wi-Fi off 8 s mid-match: reconnect to the same seat (pinned room key) and finish: PASS. Host leaves: HostLeft:
   PASS. No crash in the log; app uninstalled, Wi-Fi and rotation as found, lock freed.
+
+**2026-11-03, `host.leave()` timing (Mac, JVM).** One full-suite run spent 267 s in a test's `host.leave()` cleanup.
+Every leave step is now traced (room closed sent, writers flushed, server stopped) and `LeaveTimingTest` times 20
+leaves with two joiners mid-game per run: about 800 leaves over 41 full-suite runs, worst 20 ms; Ktor's CIO stop is
+bounded (grace 500 ms + timeout 1 s). **UNEXPLAINED**: the Mac was heavily loaded that day (one adb tap took 28 min
+at 12:15), so CPU starvation during a full-suite run is the working guess (ceo). The loopback cleanup is bounded to
+10 s and prints the leave timeline if it ever hangs; the sample host logs how long leave takes on a phone.
+
+**2026-11-03, first-connect flake on the Mac: root cause.** The trace recorder caught a test client getting HTTP 404
+from `127.0.0.1:<port>`: a JetBrains process listened on loopback at the same random port our host had bound on
+`0.0.0.0`, and macOS routes a loopback dial to the more specific listener. About 1 full-suite run in 20 collided.
+Fixed in the tests: `NearbyHost.open(port, bindHost)` and test hosts bind `127.0.0.1`. Not a phone risk on Android
+(joiners dial the host's Wi-Fi IP, and Linux refuses a specific-IP bind on a port held by `0.0.0.0`); iOS follows BSD
+rules like macOS, so recheck in week 3.
+
+**Orphan seat (evidence, 2026-11-03).** `CutBeforeWelcomeTest` cuts the first socket after the host seated the
+joiner and before the Welcome arrives: the joiner retries without a token and is seated again, leaving
+`[Host, Asha (offline), Asha]`; the game cannot start until the reconnect window frees the ghost. Same for a join
+request. Fixed (v0.3.2): the joiner makes one random join id per `join()`/`requestJoin()` and sends it in every Hello
+until its Welcome (optional field, wire-compatible); a token-less Hello with a known join id gets that seat back or
+takes over its waiting request (same id, one entry on the host's list). The join id is a credential only until the
+Welcome: the host forgets it at the seat's first message, at a token reconnect, and on a kick or leave, and never
+hands back a bot seat that was not taken over (ceo's security review). A player turns ready by sending a message, so a
+join-id retry can only happen in the lobby. `CutBeforeWelcomeTest` (3) and `JoinIdTest` (13) cover code joins,
+requests accepted or still waiting, a token beating a join id, and a kicked or departed player refused both ways.
+One earlier failure ("a joiner got no view after start", run 12) had no trace and stays **UNEXPLAINED**.
 
 **2026-11-04 00:08 to 00:11, night run: MINIFIED (R8) `sample-host` release on the Lava (Android 16), Mac joiner,
 same Wi-Fi.** Code: main 29049bb (v0.3.2) plus the #11 test tools; APK 975,603 bytes.

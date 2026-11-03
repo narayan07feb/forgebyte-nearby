@@ -381,7 +381,7 @@ class RoomTest {
     }
 
     @Test
-    fun givenGameDrop_whenWindowPasses_thenBotTakesOverAndTokenDead() {
+    fun givenGameDrop_whenWindowPasses_thenBotTakesOverAndThePlayerCanStillReturn() {
         val start = startWithA()
         room.hostMove(FakeMove(start.hands[0].first()))
         room.onDisconnect("a")
@@ -389,8 +389,17 @@ class RoomTest {
         val out = room.tick()
 
         assertEquals(SeatKind.BOT, out.lastLobby(HOST_CONN).seats[1].kind)
-        assertEquals(0, room.state!!.turn)
-        assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a2", token = "tok1"), "a2"))
+        assertEquals(0, room.state!!.turn, "the bot played seat 1's turn")
+        val back = h.hello("a2", token = "tok1") // ceo, 2026-11-03: give the seat back the moment they return
+        assertEquals(SeatKind.PLAYER, back.welcome("a2").lobby.seats[1].kind)
+        assertEquals(SeatKind.PLAYER, back.lastLobby(HOST_CONN).seats[1].kind)
+    }
+
+    @Test
+    fun givenPlayerLeftMidGame_whenTryingToReturn_thenRefused() {
+        startWithA()
+        room.onMessage("a", ClientMsg.Leave)
+        assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a2", token = "tok1"), "a2"), "leaving is for good")
     }
 
     @Test
