@@ -149,8 +149,7 @@ private suspend fun session(shared: ByteArray, hostKey: ByteArray, joinerKey: By
     val toHost = aes.decodeFromByteArray(AES.Key.Format.RAW, keys.copyOfRange(0, 32))
     val toJoiner = aes.decodeFromByteArray(AES.Key.Format.RAW, keys.copyOfRange(32, 64))
     val check = sha256("check".encodeToByteArray() + transcript)
-    val number = ((check[0].toLong() and 0xff) shl 24) or ((check[1].toLong() and 0xff) shl 16) or
-        ((check[2].toLong() and 0xff) shl 8) or (check[3].toLong() and 0xff)
+    val number = (0 until 4).fold(0L) { acc, i -> (acc shl 8) or (check[i].toLong() and 0xff) }
     val code = (number % 1_000_000).toString().padStart(6, '0')
     val fingerprint = fingerprintOf(hostKey)
     return if (host) SecureSession(toJoiner, toHost, code, fingerprint) else SecureSession(toHost, toJoiner, code, fingerprint)
