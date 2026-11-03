@@ -44,13 +44,15 @@ class JoinIdTest {
     }
 
     @Test
-    fun givenGameStartedBeforeTheRetry_whenRetryWithSameJoinId_thenSeatAndCurrentView() {
-        h.hello("a", joinId = "J1"); room.onMessage("a", ClientMsg.Ready(true))
-        room.start(seed = 3)
+    fun givenSeatThatNeverSentAMessage_whenHostTriesToStart_thenNotStartableAndTheRetryReclaimsInTheLobby() {
+        // Ready needs a message, and any message ends the join id: so a join-id reclaim only ever happens in the lobby.
+        h.hello("a", joinId = "J1")
         room.onDisconnect("a")
-        val out = h.hello("a2", joinId = "J1")
-        assertEquals(1, out.welcome("a2").lobby.yourSeat)
-        assertEquals(room.state!!.hands[1], out.views("a2").single().hand)
+        assertEquals(false, room.canStart)
+        h.hello("a2", joinId = "J1")
+        room.onMessage("a2", ClientMsg.Ready(true))
+        assertEquals(true, room.canStart)
+        assertEquals(2, room.seatCount)
     }
 
     @Test
@@ -82,5 +84,65 @@ class JoinIdTest {
         assertEquals(1, out.welcome("a2").lobby.yourSeat)
         assertEquals(2, room.seatCount)
         assertEquals(emptyList(), room.joinRequests)
+    }
+
+    // ceo security finding, 2026-11-03: a join id must never bring back a seat that was kicked or left, and it is a
+    // credential only until the Welcome has arrived (the seat's first message, or a token reconnect).
+
+    private fun refusal(out: List<RoomOutput>, conn: String): RefuseReason {
+        assertTrue(out.closed(conn), "a refused connection is closed")
+        assertTrue(out.to(conn).none { it is HostMsg.Welcome || it is HostMsg.View }, "no Welcome, no view: ${out.to(conn)}")
+        return (out.to(conn).single() as HostMsg.Refused).reason
+    }
+
+    private fun startWithA() {
+        h.hello("a", joinId = "J1"); room.onMessage("a", ClientMsg.Ready(true))
+        room.start(seed = 3)
+    }
+
+    @Test
+    fun givenPlayerKickedMidGame_whenTheirJoinIdComesBack_thenRefusedAndNoViewOfTheBotSeat() {
+        startWithA()
+        room.kick(1)
+        assertEquals(SeatKind.BOT, room.hostLobby.seats[1].kind)
+        assertEquals(RefuseReason.GAME_STARTED, refusal(h.hello("a2", joinId = "J1"), "a2"))
+        assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a3", token = "tok1"), "a3"), "nor with the token")
+    }
+
+    @Test
+    fun givenPlayerLeftMidGame_whenTheirJoinIdComesBack_thenRefused() {
+        startWithA()
+        room.onMessage("a", ClientMsg.Leave)
+        assertEquals(RefuseReason.GAME_STARTED, refusal(h.hello("a2", joinId = "J1"), "a2"))
+    }
+
+    @Test
+    fun givenPlayerKickedInTheLobbyBeforeAnyMessage_whenTheirJoinIdComesBack_thenItReclaimsNothing() {
+        h.hello("a", name = "Asha", joinId = "J1") // join id still live: no message yet
+        room.kick(1)
+        val out = h.request("a2", name = "Asha", joinId = "J1")
+        assertEquals(emptyList(), out, "just a new request for the host to decide on: no seat, no Welcome")
+        assertEquals(1, room.seatCount)
+        assertEquals(1, room.joinRequests.size)
+    }
+
+    @Test
+    fun givenSeatHasSentAMessage_whenItsJoinIdIsUsed_thenItIsJustANewJoin() {
+        h.hello("a", name = "Asha", joinId = "J1")
+        room.onMessage("a", ClientMsg.Ready(true)) // proves the Welcome arrived
+        room.onDisconnect("a")
+        assertEquals(emptyList(), h.request("a2", name = "Asha", joinId = "J1"), "not a reclaim: a new request")
+        assertEquals(1, room.joinRequests.size)
+        assertEquals(false, room.hostLobby.seats[1].connected, "the old seat is not handed to the join id")
+    }
+
+    @Test
+    fun givenTokenReconnect_whenTheJoinIdIsUsedAfterwards_thenItIsJustANewJoin() {
+        h.hello("a", joinId = "J1")
+        room.onDisconnect("a")
+        h.hello("a2", token = "tok1") // proves the Welcome arrived
+        room.onDisconnect("a2")
+        assertEquals(emptyList(), h.request("a3", joinId = "J1"))
+        assertEquals(1, room.joinRequests.size)
     }
 }
