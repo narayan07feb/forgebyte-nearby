@@ -2,6 +2,7 @@ package com.forgebyte.nearby
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.cio.endpoint
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
@@ -68,6 +69,8 @@ public class NearbyClient<M, V>(
     private val firstConnectFor: Duration = 10.seconds,
 ) {
     private val http = HttpClient(CIO) {
+        // One slow attempt must not use up the whole first-connect time: each try gets its own limit.
+        engine { endpoint { connectTimeout = CONNECT_FOR.inWholeMilliseconds } }
         install(WebSockets) {
             pingIntervalMillis = 5_000
             maxFrameSize = 256L * 1024
@@ -115,7 +118,9 @@ public class NearbyClient<M, V>(
         while (true) {
             var end: EndReason? = null
             try {
+                trace("joiner: connecting to $host:$port")
                 http.webSocket(host = host, port = port, path = WS_PATH) {
+                    trace("joiner: socket open")
                     val shake = withTimeoutOrNull(HANDSHAKE_FOR) {
                         joinerHandshake(
                             pinned,
@@ -123,6 +128,7 @@ public class NearbyClient<M, V>(
                             send = { send(Frame.Text(it)) },
                         )
                     } ?: Handshake.Failed
+                    trace("joiner: key exchange $shake")
                     val secure = when (shake) {
                         is Handshake.Ok -> shake.session
                         Handshake.VersionMismatch -> {
@@ -154,9 +160,10 @@ public class NearbyClient<M, V>(
                         if (end != null) break
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // Our own cancellation goes on up; a socket error or a cut session is a drop, handled below.
                 currentCoroutineContext().ensureActive()
+                trace("joiner: attempt failed ${e::class.simpleName}: ${e.message}")
             } finally {
                 link = null
             }
@@ -170,6 +177,7 @@ public class NearbyClient<M, V>(
                 if (giveUp) end = EndReason.Unreachable
             }
             end?.let {
+                trace("joiner: ended $it")
                 _status.value = ClientStatus.Ended(it)
                 http.close()
                 return@launch
@@ -234,7 +242,8 @@ public class NearbyClient<M, V>(
 
     private companion object {
         val RETRY_FOR = 120.seconds
-        val HANDSHAKE_FOR = 10.seconds
+        val CONNECT_FOR = 5.seconds
+        val HANDSHAKE_FOR = 5.seconds
         const val VERSION_MESSAGE = "This room uses a different version of nearby play. Update the app on both phones."
     }
 }

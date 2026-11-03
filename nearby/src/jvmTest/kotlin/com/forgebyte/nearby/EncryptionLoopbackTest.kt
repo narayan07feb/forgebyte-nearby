@@ -206,10 +206,14 @@ class EncryptionLoopbackTest {
     @Test
     fun givenCodeWithAnotherRoomsFingerprint_whenJoining_thenEndsHostKeyMismatchAndHostSeesNothing() = runBlocking<Unit> {
         withTimeout(20.seconds) {
+            val timeline = java.util.Collections.synchronizedList(mutableListOf<String>())
+            val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+            traceSink = { timeline += "${t0.elapsedNow().inWholeMilliseconds} $it" }
             val port = host.open()
             val c = client()
             c.join(JoinCode("127.0.0.1", port, Harness.SECRET, "0123456789abcdef"), "Mallory")
-            assertEquals(ClientStatus.Ended(EndReason.HostKeyMismatch), c.status.first { it is ClientStatus.Ended })
+            assertEquals(ClientStatus.Ended(EndReason.HostKeyMismatch), c.status.first { it is ClientStatus.Ended }, "timeline $timeline")
+            traceSink = null
             assertEquals(1, host.lobby.value.seats.size)
             assertEquals(emptyList(), host.joinRequests.value)
             assertNull(c.checkCode.value, "nothing was agreed")
