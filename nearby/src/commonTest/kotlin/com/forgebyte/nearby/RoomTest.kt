@@ -111,10 +111,10 @@ class RoomTest {
     }
 
     @Test
-    fun givenWrongSecretAndToken_whenReconnects_thenRefusedWrongSecret() {
+    fun givenTokenWithWrongCode_whenReconnects_thenTokenDecidesAndSeatComesBack() {
         val token = h.hello("a").welcome("a").reconnectToken
         room.onDisconnect("a")
-        assertEquals(RefuseReason.WRONG_SECRET, refusal(h.hello("a2", token = token, secret = "nope"), "a2"))
+        assertEquals(1, h.hello("a2", token = token, secret = "nope").welcome("a2").lobby.yourSeat)
     }
 
     // Ready and start
