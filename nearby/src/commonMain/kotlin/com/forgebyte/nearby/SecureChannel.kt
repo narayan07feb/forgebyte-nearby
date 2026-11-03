@@ -31,6 +31,13 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  * decrypt and the connection is closed.
  */
 
+/** Test hook: set to collect a timeline of connects and key exchanges (no keys, names or game data in it). */
+internal var traceSink: ((String) -> Unit)? = null
+
+internal fun trace(line: String) {
+    traceSink?.invoke(line)
+}
+
 /** Bump when the key exchange or frame format changes. */
 internal const val CRYPTO_VERSION: Int = 1
 

@@ -35,10 +35,14 @@ class LoopbackTest {
     private fun code(port: Int) = JoinCode("127.0.0.1", port, Harness.SECRET, host.fingerprint!!)
 
     private suspend fun joined(port: Int, n: Int) = (1..n).map { i ->
+        val timeline = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+        traceSink = { timeline += "${t0.elapsedNow().inWholeMilliseconds} $it" }
         client().also {
             it.join(code(port), "P$i")
             val s = it.status.first { s -> s == ClientStatus.Connected || s is ClientStatus.Ended }
-            assertEquals(ClientStatus.Connected, s, "P$i")
+            traceSink = null
+            assertEquals(ClientStatus.Connected, s, "P$i timeline $timeline")
         }
     }
 
@@ -141,12 +145,15 @@ class LoopbackTest {
         withTimeout(20.seconds) {
             val c = client()
             val seen = java.util.Collections.synchronizedList(mutableListOf<Any>())
+            val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+            traceSink = { seen += "${t0.elapsedNow().inWholeMilliseconds} $it" }
             scope.launch { c.status.collect { seen += it } }
             scope.launch { host.joinRequests.collect { seen += "requests $it" } }
             c.requestJoin(ad(host.open()), "Asha")
             host.declineJoin(host.joinRequests.first { it.isNotEmpty() }.single().id)
             val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } as ClientStatus.Ended }
                 ?: error("never ended; saw $seen")
+            traceSink = null
             assertEquals(RefuseReason.DECLINED, (end.reason as EndReason.Refused).reason)
             assertEquals(1, host.lobby.value.seats.size)
         }
