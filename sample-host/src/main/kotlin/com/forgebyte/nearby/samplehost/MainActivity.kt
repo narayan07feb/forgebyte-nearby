@@ -45,7 +45,7 @@ class MainActivity : Activity() {
             launch { room.advertise(port) }
             launch {
                 room.joinRequests.collect { list ->
-                    list.forEach { say("request ${it.id} from ${it.name}: accepting"); room.acceptJoin(it.id) }
+                    list.forEach { say("request ${it.id} from ${it.name}, check code ${it.checkCode}: accepting"); room.acceptJoin(it.id) }
                 }
             }
             launch {

@@ -46,9 +46,12 @@ public class NearbyHost<S, M, V>(
     private val scope: CoroutineScope,
 ) {
     private val started = TimeSource.Monotonic.markNow()
-    private val room = Room(game, config, clock = { started.elapsedNow().inWholeMilliseconds })
+    private val checkCodes = mutableMapOf<String, String>() // read by the room under the lock
+    private val room = Room(game, config, clock = { started.elapsedNow().inWholeMilliseconds }, checkCodeOf = { checkCodes[it] ?: "" })
     private val lock = Mutex()
     private val outboxes = mutableMapOf<String, Channel<String>>()
+    private var hostKey: HostKey? = null
+    internal val fingerprint: String? get() = hostKey?.fingerprint
     private val writers = mutableSetOf<Job>()
     private var nextConn = 0
     private val jobs = mutableListOf<Job>()
@@ -73,6 +76,7 @@ public class NearbyHost<S, M, V>(
 
     /** Starts the server on [port] (0 picks a free one) and returns the port it listens on. */
     public suspend fun open(port: Int = 0): Int {
+        hostKey = HostKey.create() // new for this room, kept only in memory
         val server = embeddedServer(CIO, port = port, host = "0.0.0.0") {
             install(WebSockets) {
                 pingPeriodMillis = PING.inWholeMilliseconds
@@ -92,8 +96,11 @@ public class NearbyHost<S, M, V>(
         return server.engine.resolvedConnectors().first().port
     }
 
-    /** What a joiner types or scans when discovery does not work on this network. */
-    public fun joinCodes(port: Int): List<JoinCode> = localAddresses().map { JoinCode(it, port, config.roomSecret) }
+    /** What a joiner types or scans when discovery does not work on this network. Call after [open]. */
+    public fun joinCodes(port: Int): List<JoinCode> {
+        val fingerprint = checkNotNull(hostKey) { "open() first" }.fingerprint
+        return localAddresses().map { JoinCode(it, port, config.roomSecret, fingerprint) }
+    }
 
     /**
      * Advertises the room on the local network until the calling coroutine is cancelled, updating the free-seat
@@ -127,28 +134,47 @@ public class NearbyHost<S, M, V>(
     }
 
     private suspend fun serve(session: DefaultWebSocketServerSession) {
+        val key = hostKey ?: return
+        // Key exchange first; nothing about the room is sent or read before the channel is encrypted.
+        val secure = withTimeoutOrNull(HELLO_TIMEOUT) {
+            hostHandshake(
+                key,
+                receive = { (session.incoming.receiveCatching().getOrNull() as? Frame.Text)?.readText() },
+                send = { session.send(Frame.Text(it)) },
+            )
+        } ?: return
         val outbox = Channel<String>(OUTBOX)
-        val conn = lock.withLock { "c${nextConn++}".also { outboxes[it] = outbox } }
-        // The writer sends what the room queued, then closes the socket once the room closed the outbox.
+        val conn = lock.withLock {
+            "c${nextConn++}".also {
+                outboxes[it] = outbox
+                checkCodes[it] = secure.checkCode
+            }
+        }
+        // The writer seals and sends what the room queued, then closes the socket once the room closed the outbox.
         val writer = session.launch {
-            for (text in outbox) session.send(Frame.Text(text))
+            for (text in outbox) session.send(Frame.Binary(true, secure.seal(text)))
             session.flush() // else Ktor can drop the last frames (Refused, Kicked, RoomClosed) when the handler ends
             session.close()
         }
         lock.withLock { writers += writer }
         try {
             val first = withTimeoutOrNull(HELLO_TIMEOUT) { session.incoming.receiveCatching().getOrNull() }
-            val hello = (first as? Frame.Text)?.let { NearbyProtocol.decodeClient(it.readText()) }
+            val hello = (first as? Frame.Binary)?.let { secure.open(it.data) }?.let(NearbyProtocol::decodeClient)
             if (hello !is ClientMsg.Hello) return
             act { onMessage(conn, hello) }
             for (frame in session.incoming) {
-                val msg = (frame as? Frame.Text)?.let { NearbyProtocol.decodeClient(it.readText()) } ?: continue
+                // A frame that does not decrypt was changed, replayed or reordered: drop the connection.
+                val text = (frame as? Frame.Binary)?.let { secure.open(it.data) } ?: return
+                val msg = NearbyProtocol.decodeClient(text) ?: continue
                 act { onMessage(conn, msg) }
             }
         } finally {
             withContext(NonCancellable) {
                 act { onDisconnect(conn) }
-                lock.withLock { outboxes.remove(conn) }
+                lock.withLock {
+                    outboxes.remove(conn)
+                    checkCodes.remove(conn)
+                }
                 outbox.close()
                 writer.join()
                 lock.withLock { writers -= writer }
