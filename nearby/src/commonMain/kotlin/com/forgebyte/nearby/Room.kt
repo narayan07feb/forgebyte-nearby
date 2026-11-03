@@ -15,6 +15,13 @@ public class RoomConfig(
     public val requestTimeoutMs: Long = 60_000,
     /** More open requests than this are refused straight away, so a flood cannot fill the host's screen. */
     public val maxPendingRequests: Int = 4,
+    /** Bots play one move at a time, this far apart, so everyone sees each move (owner, 2026-11-03). 0: all at once. */
+    public val botDelayMs: Long = 1_000,
+    /**
+     * A player (or the host) who has not moved this long after their turn began gets their seat's bot move played by
+     * the host, like the online games' turn timer (owner, 2026-11-03). 0: no timer.
+     */
+    public val turnTimeoutMs: Long = 30_000,
 ) {
     init {
         require(minSeats in 1..maxSeats) { "need 1 <= minSeats <= maxSeats" }
@@ -66,6 +73,11 @@ public class Room<S, M, V>(
     private var out = mutableListOf<RoomOutput>()
     private var seq = 0
 
+    // The one thing due next in a game: a bot's move at [botAt], or the human [turnSeat]'s deadline.
+    private var botAt: Long? = null
+    private var turnSeat: Int? = null
+    private var turnDeadline: Long? = null
+
     public var phase: Phase = Phase.LOBBY
         private set
 
@@ -76,6 +88,15 @@ public class Room<S, M, V>(
 
     /** Join requests waiting for the host, oldest first. */
     public val joinRequests: List<JoinRequest> get() = pending.map { JoinRequest(it.id, it.name, it.checkCode) }
+
+    /**
+     * When the room next needs a [tick]: a bot move, a turn deadline, a reconnect window or a join request running
+     * out. Null when nothing is waiting. The transport sleeps until then.
+     */
+    public val nextWakeAt: Long?
+        get() = (listOfNotNull(botAt, turnDeadline) +
+            seats.mapNotNull { s -> s.droppedAt?.let { it + config.reconnectWindowMs } } +
+            pending.map { it.at + config.requestTimeoutMs }).minOrNull()
 
     /** The room as the host sees it. */
     public val hostLobby: Lobby get() = lobbyFor(0)
@@ -146,8 +167,7 @@ public class Room<S, M, V>(
         refuseAllRequests(RefuseReason.GAME_STARTED, GAME_STARTED)
         state = game.newGame(seats.size, seed)
         phase = Phase.PLAYING
-        runBots()
-        changed()
+        advance()
     }
 
     public fun hostMove(move: M): List<RoomOutput> = step { play(0, move) }
@@ -166,6 +186,7 @@ public class Room<S, M, V>(
         out = mutableListOf()
         if (phase != Phase.CLOSED) {
             expireDropped()
+            fireDue()
             block()
         }
         return out
@@ -242,8 +263,7 @@ public class Room<S, M, V>(
         game.apply(current, seat, move).fold(
             onSuccess = {
                 state = it
-                runBots()
-                changed()
+                advance()
             },
             onFailure = { reject(seat, it.message ?: "That move is not allowed.") },
         )
@@ -261,8 +281,7 @@ public class Room<S, M, V>(
             return
         }
         seats[seat].apply { kind = SeatKind.BOT; conn = null; token = null; droppedAt = null; ready = true }
-        if (phase == Phase.PLAYING) runBots()
-        changed()
+        advance()
     }
 
     private fun expireDropped() {
@@ -275,6 +294,51 @@ public class Room<S, M, V>(
             val at = seats[i].droppedAt ?: continue
             if (now - at >= config.reconnectWindowMs) drop(i)
         }
+    }
+
+    /** After the game changed: bots now (no delay) or on schedule, the turn clock, then everyone's view. */
+    private fun advance() {
+        if (config.botDelayMs == 0L) runBots()
+        schedule()
+        changed()
+    }
+
+    /** Whose move it is decides what is due: a bot plays after [RoomConfig.botDelayMs], a human has a deadline. */
+    private fun schedule() {
+        botAt = null
+        turnSeat = null
+        turnDeadline = null
+        val s = state ?: return
+        if (phase != Phase.PLAYING || game.isOver(s)) return
+        // botMove is non-null only for the seat that has something to do now (docs/ADAPTERS.md rule 4).
+        val seat = seats.indices.firstOrNull { game.botMove(s, it) != null } ?: return
+        when {
+            seats[seat].kind == SeatKind.BOT -> botAt = clock() + config.botDelayMs
+            config.turnTimeoutMs > 0 -> {
+                turnSeat = seat
+                turnDeadline = clock() + config.turnTimeoutMs
+            }
+        }
+    }
+
+    /** Plays the one move that is due, if any: a paced bot move, or the bot move for a human whose time ran out. */
+    private fun fireDue() {
+        val now = clock()
+        val s = state ?: return
+        if (phase != Phase.PLAYING) return
+        val seat = when {
+            botAt?.let { now >= it } == true -> seats.indices.firstOrNull { seats[it].kind == SeatKind.BOT && game.botMove(s, it) != null }
+            turnDeadline?.let { now >= it } == true -> turnSeat
+            else -> return
+        }
+        val next = seat?.let { game.botMove(s, it) }?.let { game.apply(s, seat, it).getOrNull() }
+        if (next == null) { // the game offered nothing playable: stop the clock rather than spin on it
+            botAt = null
+            turnDeadline = null
+            return
+        }
+        state = next
+        advance()
     }
 
     private fun runBots() {
@@ -303,7 +367,8 @@ public class Room<S, M, V>(
     private fun sendView(seat: Int) {
         val conn = seats[seat].conn ?: return
         val view = NearbyProtocol.json.encodeToJsonElement(game.viewSerializer, game.viewFor(state ?: return, seat))
-        out += RoomOutput.Send(conn, HostMsg.View(seq, view))
+        val turn = turnDeadline?.let { TurnInfo(turnSeat!!, (it - clock()).coerceAtLeast(0)) }
+        out += RoomOutput.Send(conn, HostMsg.View(seq, view, turn))
     }
 
     private fun broadcastLobby(except: Int = -1) {
