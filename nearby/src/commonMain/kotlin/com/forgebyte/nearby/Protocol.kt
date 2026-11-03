@@ -2,7 +2,6 @@ package com.forgebyte.nearby
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 
@@ -114,6 +113,6 @@ public object NearbyProtocol {
     public fun decodeClient(text: String): ClientMsg? = decodeOrNull { json.decodeFromString(ClientMsg.serializer(), text) }
     public fun decodeHost(text: String): HostMsg? = decodeOrNull { json.decodeFromString(HostMsg.serializer(), text) }
 
-    private inline fun <T> decodeOrNull(block: () -> T): T? =
-        try { block() } catch (_: SerializationException) { null } catch (_: IllegalArgumentException) { null }
+    // SerializationException is an IllegalArgumentException.
+    private inline fun <T> decodeOrNull(block: () -> T): T? = try { block() } catch (_: IllegalArgumentException) { null }
 }
