@@ -72,8 +72,12 @@ public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
     discoverServices(SERVICE_TYPE).collect { event ->
         when (event) {
             is DiscoveryEvent.Discovered -> event.resolve() // addresses arrive with Resolved
-            is DiscoveryEvent.Resolved -> event.service.toRoomAd(gameId)
-                ?.let { found[event.service.key] = it } ?: found.remove(event.service.key)
+            is DiscoveryEvent.Resolved -> {
+                val ad = event.service.toRoomAd(gameId)
+                if (ad != null) found[event.service.key] = ad
+                // Resolved without a usable address yet: ask again, the IPv4 record often comes next.
+                else if (event.service.txt[Txt.GAME]?.decodeToString() == gameId) event.resolve()
+            }
             is DiscoveryEvent.Removed -> found.remove(event.service.key)
         }
         emit(found.values.toList())
@@ -83,9 +87,9 @@ public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
 internal fun DiscoveredService.toRoomAd(gameId: String): RoomAd? {
     fun text(key: String) = txt[key]?.decodeToString()
     if (text(Txt.GAME) != gameId) return null
-    // Prefer IPv4: NSD and JmDNS can list a link-local IPv6 address first, which the join code cannot carry.
-    val address = addresses.firstOrNull { ':' !in it } ?: addresses.firstOrNull() ?: host.takeIf { it.isNotBlank() }
-        ?: return null
+    // IPv4 or a host name only: NSD and JmDNS can resolve just a link-local IPv6 address at first ("[fe80::..]"),
+    // which cannot be dialled without the interface scope (seen on the Lava, 2026-11-03).
+    val address = (addresses + host).firstOrNull { it.isNotBlank() && ':' !in it } ?: return null
     return RoomAd(
         key = key,
         roomName = text(Txt.NAME) ?: name,

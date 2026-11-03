@@ -12,10 +12,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -27,13 +32,14 @@ import kotlin.time.TimeSource
 /** Exit code 0 when the match reached the end, 1 otherwise. */
 fun main(args: Array<String>) {
     val opts = args.toList().chunked(2).associate { it[0] to it.getOrElse(1) { "" } }
-    val ok = runBlocking { run(opts["--code"]?.let(JoinCode::parse), opts["--name"] ?: "Mac") }
+    val think = opts["--think"]?.toLongOrNull() ?: 0L // ms before each move, to make a match long enough for a Wi-Fi toggle
+    val ok = runBlocking { run(opts["--code"]?.let(JoinCode::parse), opts["--name"] ?: "Mac", think) }
     exitProcess(if (ok) 0 else 1)
 }
 
 private fun say(text: String) = println("[nearby] $text")
 
-private suspend fun run(code: JoinCode?, name: String): Boolean {
+private suspend fun run(code: JoinCode?, name: String, thinkMs: Long): Boolean {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val client = NearbyClient(DemoGame.ID, DemoGame.VERSION, DemoMove.serializer(), DemoView.serializer(), scope)
     val start = TimeSource.Monotonic.markNow()
@@ -62,17 +68,23 @@ private suspend fun run(code: JoinCode?, name: String): Boolean {
             combine(client.view.filterNotNull(), client.status) { v, s -> v to s }.collect { (v, s) ->
                 sentAt?.let { rtts += it.elapsedNow(); sentAt = null } // first view after our move answers it
                 if (s == ClientStatus.Connected && v.turn == client.lobby.value!!.yourSeat && v.hand.isNotEmpty()) {
+                    delay(thinkMs)
                     sentAt = TimeSource.Monotonic.markNow()
                     if (!client.move(DemoMove(v.hand.first()))) sentAt = null
                 }
             }
         }
         client.ready(true)
-        val over = withTimeoutOrNull(300.seconds) { client.lobby.first { it?.phase == Phase.OVER } }
+        val finish = withTimeoutOrNull(600.seconds) {
+            merge(
+                client.lobby.filter { it?.phase == Phase.OVER }.map { "over" },
+                client.status.filterIsInstance<ClientStatus.Ended>().map { "ended: ${it.reason}" },
+            ).first()
+        }
         val sorted = rtts.sorted()
         fun pct(p: Int) = sorted.getOrNull((sorted.size * p / 100).coerceAtMost(sorted.size - 1))
         say("moves timed ${sorted.size}; round trip p50 ${pct(50)}, p95 ${pct(95)}, max ${sorted.lastOrNull()}")
-        if (over == null) return false.also { say("FAIL match did not end in 300 s (status ${client.status.value})") }
+        if (finish != "over") return false.also { say("FAIL ${finish ?: "match did not end in 600 s"}") }
         say("PASS match over after ${start.elapsedNow()}; my hand ${client.view.value?.hand?.size}, pile ${client.view.value?.pile?.size}")
         client.leave()
         return true

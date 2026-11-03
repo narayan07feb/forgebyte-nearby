@@ -15,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /** PLAN test 3: one host and three clients over localhost WebSockets. */
 class LoopbackTest {
@@ -147,9 +148,24 @@ class LoopbackTest {
     @Test
     fun givenNoHost_whenJoins_thenEndsUnreachable() = runBlocking<Unit> {
         withTimeout(20.seconds) {
-            val c = client()
+            val c = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope,
+                firstConnectFor = 2.seconds)
+            val started = TimeSource.Monotonic.markNow()
             c.join(JoinCode("127.0.0.1", 1, Harness.SECRET), "Lost")
             assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.first { it is ClientStatus.Ended })
+            assertTrue(started.elapsedNow() >= 2.seconds, "kept trying for the first-connect time")
+        }
+    }
+
+    @Test
+    fun givenHostNotUpYet_whenClientJoinsFirst_thenFirstConnectRetriesUntilHostOpens() = runBlocking<Unit> {
+        withTimeout(20.seconds) {
+            val port = java.net.ServerSocket(0).use { it.localPort } // free now, host opens it a bit later
+            val c = client()
+            c.join(JoinCode("127.0.0.1", port, Harness.SECRET), "Early")
+            kotlinx.coroutines.delay(1_500)
+            host.open(port)
+            assertEquals(ClientStatus.Connected, c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
         }
     }
 
