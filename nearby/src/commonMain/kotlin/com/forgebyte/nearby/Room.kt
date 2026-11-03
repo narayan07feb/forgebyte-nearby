@@ -54,6 +54,9 @@ public class Room<S, M, V>(
 
     public val seatCount: Int get() = seats.size
 
+    /** The room as the host sees it. */
+    public val hostLobby: Lobby get() = lobbyFor(0)
+
     /** Every human joiner is connected and ready, and there are enough seats. */
     public val canStart: Boolean
         get() = phase == Phase.LOBBY && seats.size >= config.minSeats &&
