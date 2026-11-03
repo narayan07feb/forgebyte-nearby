@@ -120,6 +120,11 @@ host close the connection; a code with another room's fingerprint ends `HostKeyM
 host; the check codes match on both ends and differ with someone in the middle. Mutation-checked: plaintext frames,
 no counter, no fingerprint check, no commitment check, and a host that ignores bad frames each make a test fail.
 
+**Fail closed** (`FailClosedTest`, ceo 2026-11-03): against a fake host that records every frame, a joiner whose code
+does not match the host's key sends only its key commitment (never its key, an encrypted frame, a name, the room code
+or a token), ends `HostKeyMismatch` at once and never retries; the same when the wrong host answers late; a host that
+never answers ends `Unreachable` with only commitments sent. Each connect and each key exchange has its own 5 s limit.
+
 **Residual risk after the fix:**
 - The protocol is our composition of standard library parts, reviewed in this repo only, not audited. A maintained
   Noise-protocol library for KMP would replace it if one appears.
@@ -188,6 +193,14 @@ no counter, no fingerprint check, no commitment check, and a host that ignores b
 - Host Wi-Fi off for 8 s mid-match, then on: the joiner reconnected to the same seat and finished: PASS.
 - Host leaves mid-match: the joiner ended at once with HostLeft: PASS.
 - No crash from our app in the phone log. The test app was uninstalled, Wi-Fi and rotation were left as found.
+
+**2026-11-03, encrypted path on the Lava (Android 16, Android's own crypto), Mac joiner, same Wi-Fi.**
+- Join request via discovery: found in 3.2 s; check code on the host log and on the joiner both `760268`; accepted,
+  full match PASS.
+- Code join with `host:port:code:fingerprint`: joined in 0.7 s, full match PASS, move round trip p50 48 to 52 ms, max
+  61 to 69 ms.
+- Host Wi-Fi off 8 s mid-match: reconnect to the same seat (pinned room key) and finish: PASS. Host leaves: HostLeft:
+  PASS. No crash in the log; app uninstalled, Wi-Fi and rotation as found, lock freed.
 
 ## Rules for this repo
 

@@ -135,6 +135,7 @@ public class NearbyHost<S, M, V>(
 
     private suspend fun serve(session: DefaultWebSocketServerSession) {
         val key = hostKey ?: return
+        trace("host: socket open")
         // Key exchange first; nothing about the room is sent or read before the channel is encrypted.
         val secure = withTimeoutOrNull(HELLO_TIMEOUT) {
             hostHandshake(
@@ -142,7 +143,8 @@ public class NearbyHost<S, M, V>(
                 receive = { (session.incoming.receiveCatching().getOrNull() as? Frame.Text)?.readText() },
                 send = { session.send(Frame.Text(it)) },
             )
-        } ?: return
+        } ?: return trace("host: key exchange failed or timed out")
+        trace("host: key exchange ok")
         val outbox = Channel<String>(OUTBOX)
         val conn = lock.withLock {
             "c${nextConn++}".also {
