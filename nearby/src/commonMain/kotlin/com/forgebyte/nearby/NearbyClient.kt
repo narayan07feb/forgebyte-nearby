@@ -116,6 +116,7 @@ public class NearbyClient<M, V>(
      */
     private fun connect(host: String, port: Int, secret: String?, fingerprint: String?, name: String): Job = scope.launch {
         val started = TimeSource.Monotonic.markNow()
+        val joinId = secureRandomBytes(16).toHex() // one per join, kept across retries until the Welcome
         var pinned = fingerprint // after the first join, every reconnect must reach the same room key
         var token: String? = null
         var droppedAt: TimeSource.Monotonic.ValueTimeMark? = null
@@ -149,7 +150,10 @@ public class NearbyClient<M, V>(
                     _checkCode.value = secure.checkCode
                     link = Link(this, secure)
                     // A reconnect proves the seat with its token alone, so a seat that joined by request comes back too.
-                    val hello = ClientMsg.Hello(PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token)
+                    val hello = ClientMsg.Hello(
+                        PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token,
+                        joinId = joinId.takeIf { token == null },
+                    )
                     send(hello)
                     if (hello.roomSecret == null && token == null) _status.value = ClientStatus.WaitingForHost
                     for (frame in incoming) {

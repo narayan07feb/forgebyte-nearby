@@ -27,6 +27,12 @@ public sealed interface ClientMsg {
         val name: String,
         val roomSecret: String? = null,
         val reconnectToken: String? = null,
+        /**
+         * Random, made once per join and kept across retries until the Welcome: a retry whose first socket died
+         * after the host seated it (or queued its request) gets the same seat or request back, not a second one.
+         * Optional: older joiners do not send it.
+         */
+        val joinId: String? = null,
     ) : ClientMsg
 
     @Serializable

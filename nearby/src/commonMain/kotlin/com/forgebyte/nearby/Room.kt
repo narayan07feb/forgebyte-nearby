@@ -65,9 +65,11 @@ public class Room<S, M, V>(
         var droppedAt: Long? = null
         /** A bot plays this seat for a player who dropped past the reconnect window; the token still brings them back. */
         var takenOver = false
+        /** The joiner's join id, so a retry that never got its Welcome finds this seat again. */
+        var joinId: String? = null
     }
 
-    private class Pending(val id: Int, val conn: String, val name: String, val at: Long, val checkCode: String)
+    private class Pending(val id: Int, var conn: String, val name: String, val at: Long, var checkCode: String, val joinId: String?)
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -156,7 +158,7 @@ public class Room<S, M, V>(
             phase != Phase.LOBBY -> refuse(p.conn, RefuseReason.GAME_STARTED, GAME_STARTED)
             seats.size >= config.maxSeats -> refuse(p.conn, RefuseReason.ROOM_FULL, ROOM_FULL)
             else -> {
-                seats += Seat(p.name, SeatKind.PLAYER, p.conn)
+                seats += Seat(p.name, SeatKind.PLAYER, p.conn).apply { joinId = p.joinId }
                 welcome(seats.lastIndex)
             }
         }
@@ -213,20 +215,18 @@ public class Room<S, M, V>(
         if (h.reconnectToken != null) {
             val seat = seats.indexOfFirst { t -> t.token?.let { sameSecret(it, h.reconnectToken) } == true }
             if (seat < 0) return refuse(conn, RefuseReason.RECONNECT_EXPIRED, "Your seat is gone. Join again.")
-            seats[seat].conn?.let { out += RoomOutput.Close(it) } // a half-open old socket
-            seats[seat].conn = conn
-            seats[seat].droppedAt = null
-            val returning = seats[seat].takenOver
-            // Back after the window: the seat is theirs again at once and any bot plan made for it is dropped.
-            if (returning) seats[seat].apply { kind = SeatKind.PLAYER; takenOver = false }
-            welcome(seat)
-            if (returning) {
-                schedule()
-                changed()
-            } else if (phase != Phase.LOBBY) {
-                sendView(seat)
+            return reseat(seat, conn)
+        }
+        if (h.joinId != null) {
+            // A retry of a join whose first socket died before its Welcome: same seat, or same request, again.
+            val seat = seats.indexOfFirst { t -> t.joinId?.let { sameSecret(it, h.joinId) } == true }
+            if (seat >= 0) return reseat(seat, conn)
+            pending.firstOrNull { p -> p.joinId?.let { sameSecret(it, h.joinId) } == true }?.let { p ->
+                if (p.conn != conn) out += RoomOutput.Close(p.conn)
+                p.conn = conn
+                p.checkCode = checkCodeOf(conn)
+                return
             }
-            return
         }
         if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
         if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
@@ -234,11 +234,28 @@ public class Room<S, M, V>(
             if (pending.size >= config.maxPendingRequests) {
                 return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
             }
-            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn))
+            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn), h.joinId)
             return
         }
-        seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn)
+        seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn).apply { joinId = h.joinId }
         welcome(seats.lastIndex)
+    }
+
+    /** The seat's player is back on [conn] (with their token, or their join id before any Welcome). */
+    private fun reseat(seat: Int, conn: String) {
+        seats[seat].conn?.takeIf { it != conn }?.let { out += RoomOutput.Close(it) } // a half-open old socket
+        seats[seat].conn = conn
+        seats[seat].droppedAt = null
+        val returning = seats[seat].takenOver
+        // Back after the window: the seat is theirs again at once and any bot plan made for it is dropped.
+        if (returning) seats[seat].apply { kind = SeatKind.PLAYER; takenOver = false }
+        welcome(seat)
+        if (returning) {
+            schedule()
+            changed()
+        } else if (phase != Phase.LOBBY) {
+            sendView(seat)
+        }
     }
 
     private fun takeRequest(id: Int) = pending.find { it.id == id }?.also { pending.remove(it) }
