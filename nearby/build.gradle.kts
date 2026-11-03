@@ -19,6 +19,16 @@ kotlin {
         compilerOptions { jvmTarget.set(JvmTarget.JVM_11) }
     }
 
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
+    applyDefaultHierarchyTemplate {
+        common {
+            group("jvmShared") {
+                withAndroidTarget()
+                withJvm()
+            }
+        }
+    }
+
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.serialization.json)
@@ -28,14 +38,14 @@ kotlin {
             implementation(libs.ktor.server.websockets)
             implementation(libs.ktor.client.cio)
             implementation(libs.ktor.client.websockets)
+            implementation(libs.cryptography.core)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation(libs.kotlinx.coroutines.test)
         }
-        // Code shared by the two JVM-based targets (java.security, java.net).
-        val jvmShared by creating { dependsOn(commonMain.get()) }
-        androidMain.get().dependsOn(jvmShared)
-        jvmMain.get().dependsOn(jvmShared)
+        // Code shared by the two JVM-based targets (java.security, java.net); see the hierarchy below.
+        getByName("jvmSharedMain").dependencies { implementation(libs.cryptography.provider.jdk) }
     }
 }
 

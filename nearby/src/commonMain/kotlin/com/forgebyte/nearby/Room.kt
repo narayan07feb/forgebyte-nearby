@@ -21,8 +21,12 @@ public class RoomConfig(
     }
 }
 
-/** Someone asking to join; the host accepts or declines it by [id]. */
-public data class JoinRequest(val id: Int, val name: String)
+/**
+ * Someone asking to join; the host accepts or declines it by [id]. The host's screen shows [checkCode] next to the
+ * name; the joiner's screen shows its own. Accept only when they match: a different code means someone on the
+ * network sits between the two phones.
+ */
+public data class JoinRequest(val id: Int, val name: String, val checkCode: String)
 
 /** What the transport must do after a room call: send a message to a connection, or close it. */
 public sealed interface RoomOutput {
@@ -45,6 +49,8 @@ public class Room<S, M, V>(
     private val config: RoomConfig,
     private val clock: () -> Long,
     private val newToken: () -> String = ::secureToken,
+    /** The check code of a connection's encrypted channel, shown with its join request. */
+    private val checkCodeOf: (conn: String) -> String = { "" },
 ) {
     private class Seat(var name: String, var kind: SeatKind, var conn: String?) {
         var token: String? = null
@@ -52,7 +58,7 @@ public class Room<S, M, V>(
         var droppedAt: Long? = null
     }
 
-    private class Pending(val id: Int, val conn: String, val name: String, val at: Long)
+    private class Pending(val id: Int, val conn: String, val name: String, val at: Long, val checkCode: String)
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -69,7 +75,7 @@ public class Room<S, M, V>(
     public val seatCount: Int get() = seats.size
 
     /** Join requests waiting for the host, oldest first. */
-    public val joinRequests: List<JoinRequest> get() = pending.map { JoinRequest(it.id, it.name) }
+    public val joinRequests: List<JoinRequest> get() = pending.map { JoinRequest(it.id, it.name, it.checkCode) }
 
     /** The room as the host sees it. */
     public val hostLobby: Lobby get() = lobbyFor(0)
@@ -194,7 +200,7 @@ public class Room<S, M, V>(
             if (pending.size >= config.maxPendingRequests) {
                 return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
             }
-            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock())
+            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn))
             return
         }
         seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn)
@@ -337,4 +343,8 @@ public class Room<S, M, V>(
 }
 
 /** A random 128-bit token from the platform's secure random source. */
-internal expect fun secureToken(): String
+internal fun secureToken(): String = secureRandomBytes(16).toHex()
+
+internal expect fun secureRandomBytes(size: Int): ByteArray
+
+internal fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
