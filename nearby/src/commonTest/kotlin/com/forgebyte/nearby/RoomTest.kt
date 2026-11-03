@@ -214,8 +214,8 @@ class RoomTest {
 
     @Test
     fun givenLegalMoves_whenPlayedToEnd_thenViewsSeqGrowAndPhaseOver() {
-        val start = startWithA()
-        var seqs = mutableListOf<Int>()
+        startWithA()
+        val seqs = mutableListOf<Int>()
         var turn = 0
         while (room.phase == Phase.PLAYING) {
             val s = room.state!!
@@ -225,7 +225,8 @@ class RoomTest {
             turn = 1 - turn
         }
         assertEquals(Phase.OVER, room.phase)
-        assertEquals((2..start.hands.flatten().size + 1).toList(), seqs)
+        assertEquals((2 until 2 + seqs.size).toList(), seqs, "start sent seq 1, then one view per move")
+        assertTrue(room.state!!.hands.any { it.isEmpty() })
         assertIs<HostMsg.MoveRejected>(room.hostMove(FakeMove("C0Z")).to(HOST_CONN).single())
     }
 
@@ -316,9 +317,8 @@ class RoomTest {
 
     @Test
     fun givenLobbyDrop_whenBackInsideWindow_thenSameSeatAndNewToken() {
-        h.hello("a", name = "Asha")
+        val token = h.hello("a", name = "Asha").welcome("a").reconnectToken
         h.hello("b")
-        val token = h.room.let { h.hello("x") }.let { "tok1" }
         val drop = room.onDisconnect("a")
         assertFalse(drop.lastLobby(HOST_CONN).seats[1].connected)
 
@@ -328,7 +328,7 @@ class RoomTest {
         assertEquals(1, welcome.lobby.yourSeat)
         assertEquals("Asha", welcome.lobby.seats[1].name)
         assertTrue(welcome.lobby.seats[1].connected)
-        assertEquals("tok4", welcome.reconnectToken)
+        assertEquals("tok3", welcome.reconnectToken)
         assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a3", token = token), "a3"), "old token is dead")
     }
 
@@ -370,7 +370,8 @@ class RoomTest {
         room.hostMove(FakeMove(start.hands[0].first()))
         room.onDisconnect("a")
         h.now = Harness.WINDOW - 1
-        assertEquals(1, room.tick().size.let { room.state!!.turn }, "a bot did not play the dropped seat")
+        room.tick()
+        assertEquals(1, room.state!!.turn, "inside the window no bot plays the dropped seat")
 
         val out = h.hello("a2", token = token)
         assertEquals(room.state!!.hands[1], out.views("a2").single().hand)
