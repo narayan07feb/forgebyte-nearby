@@ -33,7 +33,15 @@ kotlin {
         commonMain.dependencies {
             api(libs.kotlinx.serialization.json)
             api(libs.kotlinx.coroutines.core)
-            implementation(libs.dns.sd)
+            // dns-sd-kt lists appcompat but never uses it; appcompat would add emoji2 and other start-up initializers
+            // to every game. Its code needs only androidx.core (added in androidMain).
+            // It is also built with Kotlin 2.3.20 and would lift every game's kotlin-stdlib to 2.3.20, which AGP 8.9 Lint
+            // cannot read. All 33 stdlib methods it calls exist in 2.2.20 (checked with reflection, 2026-11-03), so the
+            // games' own stdlib serves it.
+            implementation(libs.dns.sd.get().toString()) {
+                exclude(group = "androidx.appcompat")
+                exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+            }
             implementation(libs.ktor.server.cio)
             implementation(libs.ktor.server.websockets)
             implementation(libs.ktor.client.cio)
@@ -46,6 +54,10 @@ kotlin {
         }
         // Code shared by the two JVM-based targets (java.security, java.net); see the hierarchy below.
         getByName("jvmSharedMain").dependencies { implementation(libs.cryptography.provider.jdk) }
+        androidMain.dependencies {
+            implementation(libs.androidx.startup)
+            implementation(libs.androidx.core)
+        }
     }
 }
 
