@@ -71,6 +71,7 @@ internal const val MAX_ROOM_NAME = 40
 
 /** Rooms of [gameId] on the local network, updated as they appear, change and go away. */
 public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
+    ensureDiscoveryReady()
     val found = mutableMapOf<String, RoomAd>()
     emit(emptyList())
     discoverServices(SERVICE_TYPE).collect { event ->
@@ -105,6 +106,9 @@ internal fun DiscoveredService.toRoomAd(gameId: String): RoomAd? {
         port = port,
     )
 }
+
+/** Android: throws until NearbyAndroid.init(context) ran. Elsewhere nothing to do. */
+internal expect fun ensureDiscoveryReady()
 
 /** Site-local IPv4 addresses of this device, for the join code. */
 internal expect fun localAddresses(): List<String>

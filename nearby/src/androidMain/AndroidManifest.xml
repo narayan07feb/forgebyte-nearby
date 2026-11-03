@@ -1,8 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Merged into each game: local sockets (Ktor) and NSD discovery (dns-sd-kt). No "Nearby devices" permission. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<!-- Merged into each game. Local sockets (Ktor) and NSD discovery (dns-sd-kt); no "Nearby devices" permission. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <application>
+        <!-- dns-sd-kt would run its initializer at every app start. Removed here: NearbyAndroid.init(context) runs it
+             when a player opens nearby play, so a game pays nothing until then (ceo, 2026-11-03). -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="com.appstractive.dnssd.AppContextInitializer"
+                tools:node="remove" />
+        </provider>
+    </application>
 </manifest>
