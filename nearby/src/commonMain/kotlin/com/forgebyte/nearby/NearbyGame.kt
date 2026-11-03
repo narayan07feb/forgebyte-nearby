@@ -24,4 +24,11 @@ public interface NearbyGame<State, Move, SeatView> {
     public fun botMove(state: State, seat: Int): Move?
 
     public fun isOver(state: State): Boolean
+
+    /**
+     * The seat that must act now, or null when nobody must (game over). Override it with a cheap lookup (Satti:
+     * `currentPlayerIndex`): the default asks [botMove] for every seat, which runs the bot up to [seatCount] times
+     * after each change (bot pacing and the turn timer need it every time).
+     */
+    public fun currentSeat(state: State, seatCount: Int): Int? = (0 until seatCount).firstOrNull { botMove(state, it) != null }
 }
