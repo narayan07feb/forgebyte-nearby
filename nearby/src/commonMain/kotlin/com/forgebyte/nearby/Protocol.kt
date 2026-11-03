@@ -33,9 +33,13 @@ public sealed interface ClientMsg {
     @SerialName("ready")
     public data class Ready(val ready: Boolean) : ClientMsg
 
+    /**
+     * [seenSeq] is the seq of the view the player acted on, so a move that lost a race can be told apart from an
+     * illegal one ("Too late, another player already did that"). Optional: older joiners do not send it.
+     */
     @Serializable
     @SerialName("move")
-    public data class Move(val move: JsonElement) : ClientMsg
+    public data class Move(val move: JsonElement, val seenSeq: Int? = null) : ClientMsg
 
     @Serializable
     @SerialName("leave")
