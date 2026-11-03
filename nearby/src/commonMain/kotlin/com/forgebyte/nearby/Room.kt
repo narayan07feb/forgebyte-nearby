@@ -11,11 +11,18 @@ public class RoomConfig(
     public val maxSeats: Int,
     public val minSeats: Int = 2,
     public val reconnectWindowMs: Long = 60_000,
+    /** A join request the host has not answered by then is refused. */
+    public val requestTimeoutMs: Long = 60_000,
+    /** More open requests than this are refused straight away, so a flood cannot fill the host's screen. */
+    public val maxPendingRequests: Int = 4,
 ) {
     init {
         require(minSeats in 1..maxSeats) { "need 1 <= minSeats <= maxSeats" }
     }
 }
+
+/** Someone asking to join; the host accepts or declines it by [id]. */
+public data class JoinRequest(val id: Int, val name: String)
 
 /** What the transport must do after a room call: send a message to a connection, or close it. */
 public sealed interface RoomOutput {
@@ -29,6 +36,9 @@ public sealed interface RoomOutput {
  *
  * Seat 0 is the host. In the lobby a seat that leaves, is kicked or stays dropped past the reconnect window is
  * removed; once the game started, a host bot takes that seat over so the game can go on.
+ *
+ * Three ways in: a hello with the room code (QR or typed) takes a seat at once; a hello with a reconnect token
+ * takes back that seat; a hello with neither is a join request (name only) that waits for the host's answer.
  */
 public class Room<S, M, V>(
     private val game: NearbyGame<S, M, V>,
@@ -42,7 +52,11 @@ public class Room<S, M, V>(
         var droppedAt: Long? = null
     }
 
+    private class Pending(val id: Int, val conn: String, val name: String, val at: Long)
+
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
+    private val pending = mutableListOf<Pending>()
+    private var nextRequest = 1
     private var out = mutableListOf<RoomOutput>()
     private var seq = 0
 
@@ -53,6 +67,9 @@ public class Room<S, M, V>(
         private set
 
     public val seatCount: Int get() = seats.size
+
+    /** Join requests waiting for the host, oldest first. */
+    public val joinRequests: List<JoinRequest> get() = pending.map { JoinRequest(it.id, it.name) }
 
     /** The room as the host sees it. */
     public val hostLobby: Lobby get() = lobbyFor(0)
@@ -65,7 +82,7 @@ public class Room<S, M, V>(
     public fun onMessage(conn: String, msg: ClientMsg): List<RoomOutput> = step {
         val seat = seatOf(conn)
         when {
-            msg is ClientMsg.Hello -> if (seat == null) hello(conn, msg)
+            msg is ClientMsg.Hello -> if (seat == null && pending.none { it.conn == conn }) hello(conn, msg)
             seat == null -> Unit // nothing but hello before a seat is given
             msg is ClientMsg.Ready -> if (phase == Phase.LOBBY) {
                 seats[seat].ready = msg.ready
@@ -80,6 +97,7 @@ public class Room<S, M, V>(
     }
 
     public fun onDisconnect(conn: String): List<RoomOutput> = step {
+        pending.removeAll { it.conn == conn }
         val seat = seatOf(conn) ?: return@step
         seats[seat].conn = null
         seats[seat].droppedAt = clock()
@@ -101,8 +119,25 @@ public class Room<S, M, V>(
         drop(seat)
     }
 
+    public fun acceptJoin(id: Int): List<RoomOutput> = step {
+        val p = takeRequest(id) ?: return@step
+        when {
+            phase != Phase.LOBBY -> refuse(p.conn, RefuseReason.GAME_STARTED, GAME_STARTED)
+            seats.size >= config.maxSeats -> refuse(p.conn, RefuseReason.ROOM_FULL, ROOM_FULL)
+            else -> {
+                seats += Seat(p.name, SeatKind.PLAYER, p.conn)
+                welcome(seats.lastIndex)
+            }
+        }
+    }
+
+    public fun declineJoin(id: Int): List<RoomOutput> = step {
+        takeRequest(id)?.let { refuse(it.conn, RefuseReason.DECLINED, "The host did not let you in.") }
+    }
+
     public fun start(seed: Long): List<RoomOutput> = step {
         if (!canStart) return@step
+        refuseAllRequests(RefuseReason.GAME_STARTED, GAME_STARTED)
         state = game.newGame(seats.size, seed)
         phase = Phase.PLAYING
         runBots()
@@ -114,10 +149,11 @@ public class Room<S, M, V>(
     /** The host closes the room: everyone is told and disconnected. */
     public fun hostLeave(): List<RoomOutput> = step {
         phase = Phase.CLOSED
-        seats.drop(1).mapNotNull { it.conn }.forEach {
+        (seats.drop(1).mapNotNull { it.conn } + pending.map { it.conn }).forEach {
             out += RoomOutput.Send(it, HostMsg.RoomClosed(CloseReason.HOST_LEFT))
             out += RoomOutput.Close(it)
         }
+        pending.clear()
     }
 
     private inline fun step(block: () -> Unit): List<RoomOutput> {
@@ -136,7 +172,8 @@ public class Room<S, M, V>(
             h.gameId != game.gameId -> RefuseReason.WRONG_GAME to "This room is for another game."
             h.gameVersion != config.gameVersion -> RefuseReason.GAME_VERSION_MISMATCH to
                 "The host has game version ${config.gameVersion}, you have ${h.gameVersion}. Update the app on both phones."
-            !sameSecret(h.roomSecret, config.roomSecret) -> RefuseReason.WRONG_SECRET to "Wrong room code."
+            h.reconnectToken == null && h.roomSecret != null && !sameSecret(h.roomSecret, config.roomSecret) ->
+                RefuseReason.WRONG_SECRET to "Wrong room code."
             else -> null
         }
         if (refusal != null) return refuse(conn, refusal.first, refusal.second)
@@ -151,10 +188,24 @@ public class Room<S, M, V>(
             if (phase != Phase.LOBBY) sendView(seat)
             return
         }
-        if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, "The game has already started.")
-        if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, "The room is full.")
+        if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
+        if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
+        if (h.roomSecret == null) {
+            if (pending.size >= config.maxPendingRequests) {
+                return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
+            }
+            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock())
+            return
+        }
         seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn)
         welcome(seats.lastIndex)
+    }
+
+    private fun takeRequest(id: Int) = pending.find { it.id == id }?.also { pending.remove(it) }
+
+    private fun refuseAllRequests(reason: RefuseReason, message: String) {
+        pending.forEach { refuse(it.conn, reason, message) }
+        pending.clear()
     }
 
     private fun refuse(conn: String, reason: RefuseReason, message: String) {
@@ -210,6 +261,10 @@ public class Room<S, M, V>(
 
     private fun expireDropped() {
         val now = clock()
+        pending.filter { now - it.at >= config.requestTimeoutMs }.forEach {
+            pending.remove(it)
+            refuse(it.conn, RefuseReason.REQUEST_TIMED_OUT, "The host did not answer.")
+        }
         for (i in seats.indices.reversed()) {
             val at = seats[i].droppedAt ?: continue
             if (now - at >= config.reconnectWindowMs) drop(i)
@@ -264,6 +319,8 @@ public class Room<S, M, V>(
 
     private companion object {
         const val MAX_NAME = 20
+        const val GAME_STARTED = "The game has already started."
+        const val ROOM_FULL = "The room is full."
         const val MAX_BOT_STEPS = 10_000
 
         fun cleanName(raw: String, seat: Int) =

@@ -63,6 +63,10 @@ public class NearbyHost<S, M, V>(
     private val _canStart = MutableStateFlow(false)
     public val canStart: StateFlow<Boolean> = _canStart.asStateFlow()
 
+    private val _joinRequests = MutableStateFlow<List<JoinRequest>>(emptyList())
+    /** People asking to join; answer each with [acceptJoin] or [declineJoin]. */
+    public val joinRequests: StateFlow<List<JoinRequest>> = _joinRequests.asStateFlow()
+
     private val _rejections = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Why the host's own move was refused. */
     public val rejections: SharedFlow<String> = _rejections.asSharedFlow()
@@ -93,25 +97,20 @@ public class NearbyHost<S, M, V>(
 
     /**
      * Advertises the room on the local network until the calling coroutine is cancelled, updating the free-seat
-     * count as it changes. An [open] room carries its secret, so a joiner can tap it in the list; otherwise the
-     * joiner needs the join code.
+     * count as it changes. A joiner who taps it sends a join request; see [joinRequests].
      */
-    public suspend fun advertise(port: Int, open: Boolean = true) {
-        lobby.map { it.phase to config.maxSeats - it.seats.size }.distinctUntilChanged().collectLatest { (phase, free) ->
-            publishService(SERVICE_TYPE, config.roomName.take(MAX_ROOM_NAME)) {
-                this.port = port
-                txt = buildMap {
-                    put(Txt.GAME, game.gameId)
-                    put(Txt.PROTOCOL, PROTOCOL_VERSION.toString())
-                    put(Txt.GAME_VERSION, config.gameVersion.toString())
-                    put(Txt.NAME, config.roomName.take(MAX_ROOM_NAME))
-                    put(Txt.FREE, (if (phase == Phase.LOBBY) free else 0).toString())
-                    if (open) put(Txt.SECRET, config.roomSecret)
+    public suspend fun advertise(port: Int) {
+        lobby.map { if (it.phase == Phase.LOBBY) config.maxSeats - it.seats.size else 0 }.distinctUntilChanged()
+            .collectLatest { free ->
+                publishService(SERVICE_TYPE, config.roomName.take(MAX_ROOM_NAME)) {
+                    this.port = port
+                    txt = roomTxt(game.gameId, config, free)
                 }
             }
-        }
     }
 
+    public suspend fun acceptJoin(id: Int): Unit = act { acceptJoin(id) }
+    public suspend fun declineJoin(id: Int): Unit = act { declineJoin(id) }
     public suspend fun addBot(): Unit = act { addBot() }
     public suspend fun kick(seat: Int): Unit = act { kick(seat) }
     public suspend fun startGame(seed: Long = Random.nextLong()): Unit = act { start(seed) }
@@ -168,6 +167,7 @@ public class NearbyHost<S, M, V>(
             is RoomOutput.Close -> outboxes.remove(out.conn)?.close()
         }
         _canStart.value = room.canStart
+        _joinRequests.value = room.joinRequests
     }
 
     private fun showOnHost(msg: HostMsg) {
@@ -185,6 +185,5 @@ public class NearbyHost<S, M, V>(
         val FLUSH = 1.seconds
         const val MAX_FRAME = 64L * 1024
         const val OUTBOX = 64
-        const val MAX_ROOM_NAME = 40
     }
 }

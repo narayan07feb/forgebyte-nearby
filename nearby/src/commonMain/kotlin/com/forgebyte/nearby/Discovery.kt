@@ -13,7 +13,10 @@ public const val SERVICE_TYPE: String = "_forgebyte._tcp"
 /** WebSocket path on the host. */
 public const val WS_PATH: String = "/nearby"
 
-/** A room seen on the local network. [secret] is null for a room that asks joiners to type its code. */
+/**
+ * A room seen on the local network. Tapping it sends a join request the host accepts or declines; the room code
+ * never travels in the advertisement (owner, 2026-11-03).
+ */
 public data class RoomAd(
     val key: String,
     val roomName: String,
@@ -23,7 +26,6 @@ public data class RoomAd(
     val seatsFree: Int,
     val host: String,
     val port: Int,
-    val secret: String?,
 ) {
     /** False means "update the app" rather than a join that would be refused. */
     public fun canJoin(myGameVersion: Int): Boolean =
@@ -50,8 +52,18 @@ internal object Txt {
     const val GAME_VERSION = "gv"
     const val NAME = "n"
     const val FREE = "f"
-    const val SECRET = "s"
 }
+
+/** The advertised TXT record. Public facts only: never the room code or anything a joiner could use to skip the host. */
+internal fun roomTxt(gameId: String, config: RoomConfig, freeSeats: Int): Map<String, String> = mapOf(
+    Txt.GAME to gameId,
+    Txt.PROTOCOL to PROTOCOL_VERSION.toString(),
+    Txt.GAME_VERSION to config.gameVersion.toString(),
+    Txt.NAME to config.roomName.take(MAX_ROOM_NAME),
+    Txt.FREE to freeSeats.toString(),
+)
+
+internal const val MAX_ROOM_NAME = 40
 
 /** Rooms of [gameId] on the local network, updated as they appear, change and go away. */
 public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
@@ -81,7 +93,6 @@ internal fun DiscoveredService.toRoomAd(gameId: String): RoomAd? {
         seatsFree = text(Txt.FREE)?.toIntOrNull() ?: 0,
         host = address,
         port = port,
-        secret = text(Txt.SECRET),
     )
 }
 
