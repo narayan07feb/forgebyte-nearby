@@ -11,6 +11,7 @@ import com.forgebyte.nearby.NearbyAndroid
 import com.forgebyte.nearby.NearbyHost
 import com.forgebyte.nearby.RoomConfig
 import com.forgebyte.nearby.demo.DemoGame
+import com.forgebyte.nearby.discoverRooms
 import com.forgebyte.nearby.demo.DemoMove
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,12 @@ class MainActivity : Activity() {
             val port = room.open()
             say("listening on port $port, join codes ${room.joinCodes(port)}")
             launch { room.advertise(port) }
+            // `--ez discover true`: also run Android discovery (NSD) and log what it finds, to test that path on a phone.
+            if (intent.getBooleanExtra("discover", false)) launch {
+                discoverRooms(DemoGame.ID).collect { rooms ->
+                    rooms.forEach { say("discovered '${it.roomName}' at ${it.host}:${it.port}, free ${it.seatsFree}, canJoin ${it.canJoin(DemoGame.VERSION)}") }
+                }
+            }
             launch {
                 room.joinRequests.collect { list ->
                     list.forEach { say("request ${it.id} from ${it.name}, check code ${it.checkCode}: accepting"); room.acceptJoin(it.id) }
