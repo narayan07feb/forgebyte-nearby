@@ -47,5 +47,11 @@ Mark every seat `isHuman = true` so `applyMove` never switches to `BotThinking`;
   Crazy Eights: a bot move or a draw).
 - **Countdown:** show `NearbyHost.turnTimer` / `NearbyClient.turnTimer` (`seat`, `remaining`); read `remaining` on
   each frame. No ticking messages are sent.
-- **Whose turn:** today the room finds it as the seat whose `botMove` is non-null (rule 4 above). That runs the bot
-  for every seat after each change; a cheaper, explicit hook is planned (ceo note, 2026-11-03).
+- **Whose turn:** override `currentSeat(state, seatCount)` with your engine's current player (Satti:
+  `currentPlayerIndex` unless the game is over). The default asks `botMove` for every seat after each change.
+- **Off-turn bot moves (v0.3.1):** if bots may act out of turn (Crazy Eights: catch an uncalled last card, jump in),
+  override `nextBotMove(state, botSeats, seatCount)` with your own bot order and return `BotMove(seat, move)` (uno:
+  `Bots.nextMove`, reading the seat off the move). The room plays it `botDelayMs` later unless another move lands
+  first, then asks again. Satti keeps the default (current seat only).
+- **Race results:** `apply` just refuses a move that is no longer legal; the room tells a player who lost a race "Too
+  late, another player already did that." and sends a fresh view. Do not add your own race handling.

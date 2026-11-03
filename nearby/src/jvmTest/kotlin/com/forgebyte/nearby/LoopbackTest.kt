@@ -205,7 +205,8 @@ class LoopbackTest {
                 assertEquals(1, c.view.value!!.turn, "the host's move was played for it")
             }
         } finally {
-            timed.leave()
+            // Bounded, so a hanging leave fails here instead of quietly costing minutes (seen once: 267 s, 2026-11-03).
+            withTimeout(10.seconds) { timed.leave() }
         }
     }
 

@@ -51,6 +51,7 @@ public class NearbyHost<S, M, V>(
     private val lock = Mutex()
     private val outboxes = mutableMapOf<String, Channel<String>>()
     private var hostKey: HostKey? = null
+    private var hostSeq = 0 // seq of the host's own latest view, sent with its moves
     internal val fingerprint: String? get() = hostKey?.fingerprint
     private val writers = mutableSetOf<Job>()
     private var nextConn = 0
@@ -128,7 +129,7 @@ public class NearbyHost<S, M, V>(
     public suspend fun addBot(): Unit = act { addBot() }
     public suspend fun kick(seat: Int): Unit = act { kick(seat) }
     public suspend fun startGame(seed: Long = Random.nextLong()): Unit = act { start(seed) }
-    public suspend fun move(move: M): Unit = act { hostMove(move) }
+    public suspend fun move(move: M): Unit = act { hostMove(move, seenSeq = hostSeq) }
 
     /** Ends the room for everyone, then stops the server. */
     public suspend fun leave() {
@@ -211,6 +212,7 @@ public class NearbyHost<S, M, V>(
         when (msg) {
             is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
             is HostMsg.View -> {
+                hostSeq = msg.seq
                 _view.value = NearbyProtocol.json.decodeFromJsonElement(game.viewSerializer, msg.view)
                 _turnTimer.value = TurnTimer.from(msg.turn)
             }

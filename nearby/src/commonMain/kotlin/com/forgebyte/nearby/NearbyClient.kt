@@ -198,7 +198,7 @@ public class NearbyClient<M, V>(
     public suspend fun ready(ready: Boolean): Boolean = send(ClientMsg.Ready(ready))
 
     public suspend fun move(move: M): Boolean =
-        send(ClientMsg.Move(NearbyProtocol.json.encodeToJsonElement(moveSerializer, move)))
+        send(ClientMsg.Move(NearbyProtocol.json.encodeToJsonElement(moveSerializer, move), seenSeq = lastSeq))
 
     public suspend fun leave() {
         leaving = true
