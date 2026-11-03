@@ -46,6 +46,10 @@ class CutBeforeWelcomeTest {
         private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
         val port: Int = server.localPort
         val connections = AtomicInteger()
+        private val firstSockets = mutableListOf<Socket>()
+
+        /** Cuts the first connection now, as if Wi-Fi dropped (both ends see the socket close). */
+        fun cutFirst() = synchronized(firstSockets) { firstSockets.forEach { runCatching { it.close() } } }
 
         init {
             thread(isDaemon = true) {
@@ -53,6 +57,7 @@ class CutBeforeWelcomeTest {
                     val joiner = runCatching { server.accept() }.getOrNull() ?: break
                     val toHost = Socket(InetAddress.getLoopbackAddress(), target)
                     val first = connections.getAndIncrement() == 0
+                    if (first) synchronized(firstSockets) { firstSockets += listOf(joiner, toHost) }
                     pump(joiner.getInputStream(), toHost, joiner) // joiner -> host, untouched
                     if (first) cutAtFirstBinary(toHost.getInputStream(), joiner, toHost) else pump(toHost.getInputStream(), joiner, toHost)
                 }
@@ -118,15 +123,31 @@ class CutBeforeWelcomeTest {
         withTimeoutOrNull(10.seconds) { c.view.first { it != null } } ?: error("no view after start")
     }
 
-    // Fails today (evidence, 2026-11-03): lobby [Host, Asha (offline), Asha]; the start waits for the reconnect
-    // window. Turned on by the join-id fix.
-    @org.junit.Ignore("orphan seat confirmed; enabled by the join-id fix")
+    // Failed before the join id (evidence, 2026-11-03): lobby [Host, Asha (offline), Asha].
     @Test
     fun givenCodeJoin_whenSocketDiesAfterSeatingBeforeWelcome_thenRetryEndsWithOneSeatAndAView() = runBlocking<Unit> {
         cutThenRetry(request = false)
     }
 
-    @org.junit.Ignore("orphan seat confirmed; enabled by the join-id fix")
+    @Test
+    fun givenRequestJoin_whenFirstSocketDiesWhileHostDecides_thenOneEntryAndApprovalReachesTheRetry() = runBlocking<Unit> {
+        val port = host.open(bindHost = LOOPBACK)
+        val relay = CutRelay(port)
+        val c = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope)
+        c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, relay.port), "Asha")
+        withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.isNotEmpty() } } ?: error("no request")
+        relay.cutFirst() // the host is still deciding
+        withTimeoutOrNull(15.seconds) { while (relay.connections.get() < 2 || c.status.value != ClientStatus.WaitingForHost) kotlinx.coroutines.delay(20) }
+            ?: error("no retry: ${c.status.value}")
+        val requests = withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.size == 1 } } ?: error("requests ${host.joinRequests.value}")
+        kotlinx.coroutines.delay(300) // let a late close of the first socket land: still one entry
+        assertEquals(1, host.joinRequests.value.size, "the approval list shows Asha once: ${host.joinRequests.value}")
+        host.acceptJoin(host.joinRequests.value.single().id)
+        val status = withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended } }
+        assertEquals(ClientStatus.Connected, status, "the approval reached the retried connection (first entry was ${requests.single()})")
+        assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name })
+    }
+
     @Test
     fun givenRequestJoin_whenSocketDiesAfterAcceptBeforeWelcome_thenRetryEndsWithOneSeatAndAView() = runBlocking<Unit> {
         cutThenRetry(request = true)
