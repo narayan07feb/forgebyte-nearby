@@ -15,6 +15,14 @@ android {
         versionCode = 1
         versionName = "0.1"
     }
+    // Release build only to measure the app size the library adds (R8 on, debug key); never uploaded.
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11

@@ -79,28 +79,58 @@ interface NearbyGame<State, Move, SeatView> {
 - A seat that drops comes back with its reconnect token alone, whichever way it joined.
 - Pending requests are refused when the game starts, and told "room closed" when the host leaves.
 
-## Security: known residual risk
+## Security: end-to-end encryption (owner, 2026-11-03)
 
-Traffic is plain `ws://` on the local network. Another device on the same Wi-Fi that can capture packets (an open or
-shared café network, or anyone with the Wi-Fi password) could read:
-- the moves, names and public table;
-- each joiner's own hand, as the host sends it to that joiner (never another player's hand: the host sends each seat
-  only its own view);
-- a code-joiner's room code, and each seat's reconnect token. With a token, an attacker could take over that seat after
-  a drop (cheating in a casual game; nothing else is at stake: no accounts, money or personal data beyond a display
-  name).
+Owner: "you can add e2e encryption now only" (first "before release", then moved to now). Owner rule: no home-made
+crypto, use a maintained library.
 
-Would a per-room key be worth it for week 2? Not yet:
-- **TLS (`wss://`)** with a host-made certificate whose fingerprint is in the QR code. Ktor's CIO server has no TLS, so
-  this means Netty or Jetty on the phone (much bigger app, more battery), and request joins (no QR) would still trust
-  the first certificate they see. Cost: about a week plus app size. Not worth it.
-- **App-level encryption**: an X25519 key exchange on connect and AES-GCM per message, with a KMP crypto library (for
-  example cryptography-kotlin; on iOS it brings OpenSSL, a few MB). This stops passive reading on both join paths.
-  Active interception of a request join still works unless the two phones compare a short code. Cost: about 3 to 5
-  days with tests, little battery cost.
-- Recommendation: keep plain `ws://` for the closed tests, and revisit before production if Play Data safety (an
-  "encrypted in transit" answer) or the Families review for Satti asks for it. Then app-level encryption is the
-  cheaper choice.
+**Library:** `dev.whyoleg.cryptography` (cryptography-kotlin) **0.5.0**, Apache-2.0, repo active (last push 31 Oct
+2026). Primitives: ECDH on P-256, HKDF-SHA256, AES-256-GCM, SHA-256, all from the platform's own crypto through the
+JDK provider (Android: Conscrypt/BoringSSL; JVM: SunEC/SunJCE). No BouncyCastle. iOS (week 3) uses the library's Apple
+or OpenSSL provider. Release APK (R8) grows by **17.9 KB** (sample-host: 1,462,066 to 1,479,957 bytes).
+
+**Why not X25519** (ceo first named it; ceo OK'd P-256 on 2026-11-03): X25519 is only in cryptography-kotlin 0.6.0,
+which is built with Kotlin 2.3.20 (its iOS klib will not load with our 2.2.20, like dns-sd-kt), and Android's own
+crypto has X25519 (XDH) only from API 33 while our minSdk is 24, so it would need BouncyCastle. P-256 ECDH, HMAC-SHA256
+and AES-GCM are in Android's crypto from API 11 or earlier.
+
+**How it works** (`SecureChannel.kt`):
+- Each room makes a new key pair when it opens; it lives only in memory and is gone when the room ends. Each joiner
+  makes a new key pair per connection.
+- Key exchange before any game message, commit then reveal (as in Bluetooth numeric comparison and ZRTP): the joiner
+  sends a hash of its key, the host answers with the room key and 16 random bytes, then the joiner reveals its key and
+  the host checks it against the hash. Keys come from HKDF over the ECDH secret, salted with a hash of both keys and
+  the random bytes.
+- **Code join (QR or typed):** the code carries 64 bits of the room key's fingerprint
+  (`host:port:roomcode:fingerprint`). The joiner checks it before revealing its own key; a mismatch ends with
+  `HostKeyMismatch`.
+- **List join (found nearby):** both screens show the same 6-digit check code (from both keys and the random bytes)
+  next to the request; the host accepts only if they match. Because of commit then reveal, an attacker in the middle
+  cannot search for keys that make the codes match; the chance is 1 in a million per attempt.
+- After the first join the joiner pins the room key, so every reconnect must reach the same room.
+- Every frame after the key exchange is AES-GCM with its own key per direction and the frame's counter as the nonce.
+  The receiver accepts only the next counter: a changed, replayed, dropped or reordered frame fails and the connection
+  is closed (the seat comes back through the reconnect window).
+- Names, moves, hands, the room code and reconnect tokens only ever travel inside encrypted frames. In the clear: the
+  two public keys, the random bytes and the key hash (and the mDNS advertisement: game, versions, room name, seats free).
+
+**Tests:** `SecureChannelTest` (11) and `EncryptionLoopbackTest` (5): a sniffer relay that unmasks WebSocket frames
+sees no card, name, room code, token or message type in a full match; a changed frame and a replayed frame make the
+host close the connection; a code with another room's fingerprint ends `HostKeyMismatch` with nothing reaching the
+host; the check codes match on both ends and differ with someone in the middle. Mutation-checked: plaintext frames,
+no counter, no fingerprint check, no commitment check, and a host that ignores bad frames each make a test fail.
+
+**Residual risk after the fix:**
+- The protocol is our composition of standard library parts, reviewed in this repo only, not audited. A maintained
+  Noise-protocol library for KMP would replace it if one appears.
+- A list join is only safe if the host compares the check code before tapping Accept. A host who does not look can
+  let a man in the middle in. Games must show the code next to Accept, large and clear.
+- Someone on the same Wi-Fi still sees that a room exists, its name, the game, how many seats are free, who connects
+  to the host (IP addresses), and frame sizes and timing.
+- A device on the network can still connect and send junk or many requests (handled: 10 s handshake limit, 4 waiting
+  requests at most, 64 KB frames). Blocking or dropping traffic (denial of service) cannot be prevented.
+- The room code in a QR shown on screen can be photographed by someone nearby; that only lets them join (the host sees
+  them in the lobby and can kick).
 
 ## Permissions and store
 
@@ -115,10 +145,11 @@ Would a per-room key be worth it for week 2? Not yet:
 | When | Who | What |
 |---|---|---|
 | Day 1 (3 Nov) | nearby | Repo scaffold (KMP lib, Android target, JitPack `jitpack.yml`, Kotlin 2.2.20, Ktor 3.1.0); protocol messages; room state machine in commonMain with a fake test game; unit tests |
-| Week 1 | nearby | Ktor host server + client, NSD advertise/discover, QR/code fallback, tag `0.1.0` |
+| Week 1 | nearby | Ktor host server + client, NSD advertise/discover, QR/code fallback, join approval, reconnect window, host-leaves, version refusal; tag `0.1.0` (done 3 Nov) |
 | Week 1 | uno | `NearbyGame` adapter over `UnoRules` + "Play nearby" menu (host / join / lobby), behind a debug flag first |
 | Week 2 | satti | `NearbyGame` adapter over Satti rules + "Play nearby" screens |
-| Week 2 | nearby | Reconnect window, host-leaves flow, version refusal, battery/heat check |
+| Week 1 (3 Nov) | nearby | End-to-end encryption (owner moved it to now): P-256 ECDH + HKDF + AES-GCM, fingerprint in the code, check code for list joins; tag `0.2.0` (wire-incompatible with 0.1.0). Release blocker: no store release with nearby play without it |
+| Week 2 | nearby | Battery/heat check, Wi-Fi low-latency lock for slow moves, second real phone (test 4c) |
 | Week 3 | nearby + games | iOS (Bonjour, Local network permission), Data safety, closed-test release |
 
 ## How we test

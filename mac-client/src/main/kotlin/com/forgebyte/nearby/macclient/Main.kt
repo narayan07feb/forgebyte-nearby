@@ -64,6 +64,7 @@ private suspend fun run(code: JoinCode?, name: String, thinkMs: Long): Boolean {
         val rtts = mutableListOf<Duration>()
         var sentAt: TimeSource.Monotonic.ValueTimeMark? = null
         scope.launch { client.status.collect { say("status $it") } }
+        scope.launch { client.checkCode.collect { if (it != null) say("check code $it (the host sees the same)") } }
         scope.launch {
             combine(client.view.filterNotNull(), client.status) { v, s -> v to s }.collect { (v, s) ->
                 sentAt?.let { rtts += it.elapsedNow(); sentAt = null } // first view after our move answers it
