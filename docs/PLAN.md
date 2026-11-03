@@ -266,7 +266,10 @@ rules like macOS, so recheck in week 3.
 **Orphan seat (evidence, 2026-11-03).** `CutBeforeWelcomeTest` cuts the first socket after the host seated the
 joiner and before the Welcome arrives: the joiner retries without a token and is seated again, leaving
 `[Host, Asha (offline), Asha]`; the game cannot start until the reconnect window frees the ghost. Same for a join
-request. Fix: a join id kept across retries until the Welcome (next PR). One earlier failure ("a joiner got no view
+request. Fixed (v0.3.2): the joiner makes one random join id per `join()`/`requestJoin()` and sends it in every Hello
+until its Welcome (optional field, wire-compatible); a token-less Hello with a known join id gets that seat back (any
+phase) or takes over its waiting request (same id, one entry on the host's list). `CutBeforeWelcomeTest` (3) and
+`JoinIdTest` (8) cover code joins, requests accepted or still waiting, a retry mid-game, and a token beating a join id. One earlier failure ("a joiner got no view
 after start", run 12) had no trace and stays **UNEXPLAINED**.
 
 ## Rules for this repo
