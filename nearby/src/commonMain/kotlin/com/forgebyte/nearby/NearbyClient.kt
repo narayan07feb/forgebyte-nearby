@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.KSerializer
+import kotlin.concurrent.Volatile
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -56,8 +57,8 @@ public class NearbyClient<M, V>(
             maxFrameSize = 256L * 1024
         }
     }
-    private var session: DefaultClientWebSocketSession? = null
-    private var leaving = false
+    @Volatile private var session: DefaultClientWebSocketSession? = null
+    @Volatile private var leaving = false
     private var lastSeq = 0
 
     private val _status = MutableStateFlow<ClientStatus>(ClientStatus.Connecting)
