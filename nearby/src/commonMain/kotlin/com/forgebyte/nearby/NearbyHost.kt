@@ -113,6 +113,7 @@ public class NearbyHost<S, M, V>(
      * count as it changes. A joiner who taps it sends a join request; see [joinRequests].
      */
     public suspend fun advertise(port: Int) {
+        ensureDiscoveryReady()
         lobby.map { if (it.phase == Phase.LOBBY) config.maxSeats - it.seats.size else 0 }.distinctUntilChanged()
             .collectLatest { free ->
                 publishService(SERVICE_TYPE, config.roomName.take(MAX_ROOM_NAME)) {

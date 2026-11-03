@@ -10,6 +10,10 @@ ktor = "3.1.0"
 dnssd = "1.1.2"
 # End-to-end encryption (owner, 2026-11-03). 0.5.0 is built with Kotlin 2.2.0 (0.6.0 needs 2.3 for the iOS klib).
 cryptography = "0.5.0"
+# Only to run dns-sd-kt's context initializer on first use (it is removed from app start).
+androidx-startup = "1.2.0"
+# dns-sd-kt uses only ContextCompat from androidx; it used to arrive through appcompat, which we exclude.
+androidx-core = "1.13.1"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -23,6 +27,8 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 cryptography-core = { module = "dev.whyoleg.cryptography:cryptography-core", version.ref = "cryptography" }
 cryptography-provider-jdk = { module = "dev.whyoleg.cryptography:cryptography-provider-jdk", version.ref = "cryptography" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+androidx-startup = { module = "androidx.startup:startup-runtime", version.ref = "androidx-startup" }
+androidx-core = { module = "androidx.core:core", version.ref = "androidx-core" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 
 [plugins]
