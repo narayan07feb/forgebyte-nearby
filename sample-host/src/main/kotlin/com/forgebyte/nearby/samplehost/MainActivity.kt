@@ -1,6 +1,7 @@
 package com.forgebyte.nearby.samplehost
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -67,6 +68,12 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    /** `adb shell am start -n com.forgebyte.nearby.samplehost/.MainActivity --ez leave true` ends the room. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra("leave", false)) scope.launch { host.leave(); say("host left the room") }
     }
 
     override fun onDestroy() {
