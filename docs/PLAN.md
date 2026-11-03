@@ -156,8 +156,21 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 
 ## Permissions and store
 
-- Android: `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE` (multicast lock for NSD),
-  `INTERNET` (local sockets). NSD needs no "Nearby devices" permission; check this on Android 16 before release.
+- Android: `INTERNET` (local sockets) and `CHANGE_WIFI_MULTICAST_STATE` (multicast lock for NSD), both install-time,
+  no prompt. `ACCESS_NETWORK_STATE` and `ACCESS_WIFI_STATE` were dropped (2026-11-03): nothing used them.
+- Android 16: dns-sd-kt logs that `NEARBY_WIFI_DEVICES` (local network permission) "will become an error in future
+  Android releases". Today discovery works without it (Lava, Android 16); watch the Android 17 behaviour changes.
+- **Nothing runs at app start** (ceo, 2026-11-03): dns-sd-kt's androidx.startup initializer is removed in our
+  manifest and runs when the game calls `NearbyAndroid.init(context)` (on opening nearby play); discovery throws a
+  clear error without it. appcompat (listed by dns-sd-kt, never used; it added emoji2 and lifecycle initializers to app
+  start) is excluded. `sample-host:verifyNoNearbyStartup` fails if either initializer is back in the merged manifest.
+  Sample release APK: 1,479,973 to 966,011 bytes.
+- **Kotlin stdlib stays at the games' 2.2.20:** dns-sd-kt 1.1.2 is built with Kotlin 2.3.20 and pulled kotlin-stdlib
+  2.3.20 into every game, which AGP 8.9 Lint (Kotlin 2.1 reader) cannot read. We exclude its stdlib: all 33 stdlib
+  methods it calls exist in 2.2.20 (and 2.1.0), checked with reflection. Lint errors went from 7 to 1 (dns-sd-kt's own
+  module metadata, so Lint only skips that library's insides). Other options, not taken: pin dns-sd-kt 1.0.4 (Kotlin
+  2.1.0, loses the Android resolve fixes including a crash below SDK 30); move games to Kotlin 2.3.20 (big, and Lint
+  also needs a newer AGP); ask upstream to build against an older stdlib (a GitHub issue, owner's call).
 - iOS (week 3): `NSLocalNetworkUsageDescription` + `NSBonjourServices` in Info.plist.
 - Play Data safety: no new data leaves the phone (local network only); re-check before release. Satti: Families
   check (no data sent to other players beyond the display name typed in the room).

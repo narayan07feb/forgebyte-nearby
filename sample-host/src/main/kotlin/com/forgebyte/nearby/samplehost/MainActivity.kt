@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.ScrollView
 import android.widget.TextView
+import com.forgebyte.nearby.NearbyAndroid
 import com.forgebyte.nearby.NearbyHost
 import com.forgebyte.nearby.RoomConfig
 import com.forgebyte.nearby.demo.DemoGame
@@ -31,6 +32,7 @@ class MainActivity : Activity() {
         log = TextView(this).apply { setPadding(32, 32, 32, 32) }
         setContentView(ScrollView(this).apply { addView(log) })
 
+        NearbyAndroid.init(this) // nearby play opens here; nothing ran at app start
         val code = (100_000 + SecureRandom().nextInt(900_000)).toString()
         val room = NearbyHost(
             DemoGame(),

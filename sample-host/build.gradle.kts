@@ -35,3 +35,17 @@ dependencies {
     implementation(project(":demo"))
     implementation(libs.kotlinx.coroutines.android)
 }
+
+// ceo, 2026-11-03: nothing from nearby may run at app start. Fails if the merged app manifest still registers
+// dns-sd-kt's initializer or appcompat's emoji2 initializer (appcompat is excluded from dns-sd-kt).
+val verifyNoNearbyStartup by tasks.registering {
+    dependsOn("processDebugMainManifest")
+    val manifest = layout.buildDirectory.file("intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml")
+    doLast {
+        val text = manifest.get().asFile.readText()
+        listOf("com.appstractive.dnssd.AppContextInitializer", "androidx.emoji2.text.EmojiCompatInitializer").forEach {
+            check(it !in text) { "$it runs at app start; nearby must stay lazy (see nearby/src/androidMain/AndroidManifest.xml)" }
+        }
+    }
+}
+tasks.named("check") { dependsOn(verifyNoNearbyStartup) }
