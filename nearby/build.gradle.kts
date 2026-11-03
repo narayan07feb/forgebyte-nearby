@@ -7,7 +7,7 @@ plugins {
     id("maven-publish")
 }
 
-// Android only for now; iOS targets come in week 3 (docs/PLAN.md).
+// Android for the games; JVM for the Mac loopback tests and the Mac test client. iOS comes in week 3 (docs/PLAN.md).
 kotlin {
     explicitApi()
 
@@ -15,14 +15,27 @@ kotlin {
         compilerOptions { jvmTarget.set(JvmTarget.JVM_11) }
         publishLibraryVariants("release")
     }
+    jvm {
+        compilerOptions { jvmTarget.set(JvmTarget.JVM_11) }
+    }
 
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.serialization.json)
+            api(libs.kotlinx.coroutines.core)
+            implementation(libs.dns.sd)
+            implementation(libs.ktor.server.cio)
+            implementation(libs.ktor.server.websockets)
+            implementation(libs.ktor.client.cio)
+            implementation(libs.ktor.client.websockets)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
         }
+        // Code shared by the two JVM-based targets (java.security, java.net).
+        val jvmShared by creating { dependsOn(commonMain.get()) }
+        androidMain.get().dependsOn(jvmShared)
+        jvmMain.get().dependsOn(jvmShared)
     }
 }
 
