@@ -51,6 +51,7 @@ public class NearbyHost<S, M, V>(
     private val lock = Mutex()
     private val outboxes = mutableMapOf<String, Channel<String>>()
     private var hostKey: HostKey? = null
+    private var hostSeq = 0 // seq of the host's own latest view, sent with its moves
     internal val fingerprint: String? get() = hostKey?.fingerprint
     private val writers = mutableSetOf<Job>()
     private var nextConn = 0
@@ -78,10 +79,14 @@ public class NearbyHost<S, M, V>(
     /** Why the host's own move was refused. */
     public val rejections: SharedFlow<String> = _rejections.asSharedFlow()
 
-    /** Starts the server on [port] (0 picks a free one) and returns the port it listens on. */
-    public suspend fun open(port: Int = 0): Int {
+    /**
+     * Starts the server on [port] (0 picks a free one) and returns the port it listens on. [bindHost] is the address
+     * to listen on: all interfaces by default (joiners on the Wi-Fi); tests use "127.0.0.1" so a port held on loopback
+     * by another program on a Mac cannot answer instead of us (seen 2026-11-03: a JetBrains process answered 404).
+     */
+    public suspend fun open(port: Int = 0, bindHost: String = "0.0.0.0"): Int {
         hostKey = HostKey.create() // new for this room, kept only in memory
-        val server = embeddedServer(CIO, port = port, host = "0.0.0.0") {
+        val server = embeddedServer(CIO, port = port, host = bindHost) {
             install(WebSockets) {
                 pingPeriodMillis = PING.inWholeMilliseconds
                 timeoutMillis = PING.inWholeMilliseconds * 3 // a phone that went quiet this long is treated as dropped
@@ -128,16 +133,20 @@ public class NearbyHost<S, M, V>(
     public suspend fun addBot(): Unit = act { addBot() }
     public suspend fun kick(seat: Int): Unit = act { kick(seat) }
     public suspend fun startGame(seed: Long = Random.nextLong()): Unit = act { start(seed) }
-    public suspend fun move(move: M): Unit = act { hostMove(move) }
+    public suspend fun move(move: M): Unit = act { hostMove(move, seenSeq = hostSeq) }
 
     /** Ends the room for everyone, then stops the server. */
     public suspend fun leave() {
+        val t0 = TimeSource.Monotonic.markNow()
         act { hostLeave() }
         jobs.forEach { it.cancel() }
+        trace("host: leave: room closed sent (${t0.elapsedNow()})")
         // Let every socket send "room closed" before the server goes, or joiners would take it for a drop.
         val pending = lock.withLock { writers.toList() }
-        withTimeoutOrNull(FLUSH) { pending.joinAll() }
+        val flushed = withTimeoutOrNull(FLUSH) { pending.joinAll() } != null
+        trace("host: leave: ${pending.size} writers ${if (flushed) "flushed" else "NOT flushed"} (${t0.elapsedNow()})")
         stopServer?.invoke()
+        trace("host: leave: server stopped (${t0.elapsedNow()})")
     }
 
     private suspend fun serve(session: DefaultWebSocketServerSession) {
@@ -170,6 +179,7 @@ public class NearbyHost<S, M, V>(
             val first = withTimeoutOrNull(HELLO_TIMEOUT) { session.incoming.receiveCatching().getOrNull() }
             val hello = (first as? Frame.Binary)?.let { secure.open(it.data) }?.let(NearbyProtocol::decodeClient)
             if (hello !is ClientMsg.Hello) return
+            trace("host: $conn hello (token ${hello.reconnectToken != null}, code ${hello.roomSecret != null})")
             act { onMessage(conn, hello) }
             for (frame in session.incoming) {
                 // A frame that does not decrypt was changed, replayed or reordered: drop the connection.
@@ -179,6 +189,7 @@ public class NearbyHost<S, M, V>(
             }
         } finally {
             withContext(NonCancellable) {
+                trace("host: $conn closed")
                 act { onDisconnect(conn) }
                 lock.withLock {
                     outboxes.remove(conn)
@@ -211,6 +222,7 @@ public class NearbyHost<S, M, V>(
         when (msg) {
             is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
             is HostMsg.View -> {
+                hostSeq = msg.seq
                 _view.value = NearbyProtocol.json.decodeFromJsonElement(game.viewSerializer, msg.view)
                 _turnTimer.value = TurnTimer.from(msg.turn)
             }

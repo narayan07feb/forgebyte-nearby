@@ -63,9 +63,13 @@ public class Room<S, M, V>(
         var token: String? = null
         var ready = kind != SeatKind.PLAYER
         var droppedAt: Long? = null
+        /** A bot plays this seat for a player who dropped past the reconnect window; the token still brings them back. */
+        var takenOver = false
+        /** The joiner's join id, so a retry that never got its Welcome finds this seat again. */
+        var joinId: String? = null
     }
 
-    private class Pending(val id: Int, val conn: String, val name: String, val at: Long, val checkCode: String)
+    private class Pending(val id: Int, var conn: String, val name: String, val at: Long, var checkCode: String, val joinId: String?)
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -73,7 +77,9 @@ public class Room<S, M, V>(
     private var out = mutableListOf<RoomOutput>()
     private var seq = 0
 
-    // The one thing due next in a game: a bot's move at [botAt], or the human [turnSeat]'s deadline.
+    // What is due in a game: the bots' planned move at [botAt] (chosen once, against the current state), and the
+    // human [turnSeat]'s deadline. Both can run at once (a bot may plan a catch during a human's turn).
+    private var plan: BotMove<M>? = null
     private var botAt: Long? = null
     private var turnSeat: Int? = null
     private var turnDeadline: Long? = null
@@ -108,6 +114,8 @@ public class Room<S, M, V>(
 
     public fun onMessage(conn: String, msg: ClientMsg): List<RoomOutput> = step {
         val seat = seatOf(conn)
+        // Any message after the Hello proves this connection got its Welcome: the join id is no longer needed.
+        if (seat != null && msg !is ClientMsg.Hello) seats[seat].joinId = null
         when {
             msg is ClientMsg.Hello -> if (seat == null && pending.none { it.conn == conn }) hello(conn, msg)
             seat == null -> Unit // nothing but hello before a seat is given
@@ -152,7 +160,7 @@ public class Room<S, M, V>(
             phase != Phase.LOBBY -> refuse(p.conn, RefuseReason.GAME_STARTED, GAME_STARTED)
             seats.size >= config.maxSeats -> refuse(p.conn, RefuseReason.ROOM_FULL, ROOM_FULL)
             else -> {
-                seats += Seat(p.name, SeatKind.PLAYER, p.conn)
+                seats += Seat(p.name, SeatKind.PLAYER, p.conn).apply { joinId = p.joinId }
                 welcome(seats.lastIndex)
             }
         }
@@ -170,7 +178,8 @@ public class Room<S, M, V>(
         advance()
     }
 
-    public fun hostMove(move: M): List<RoomOutput> = step { play(0, move) }
+    /** [seenSeq]: the seq of the view the host acted on (see [ClientMsg.Move.seenSeq]). */
+    public fun hostMove(move: M, seenSeq: Int? = null): List<RoomOutput> = step { play(0, move, seenSeq) }
 
     /** The host closes the room: everyone is told and disconnected. */
     public fun hostLeave(): List<RoomOutput> = step {
@@ -208,12 +217,19 @@ public class Room<S, M, V>(
         if (h.reconnectToken != null) {
             val seat = seats.indexOfFirst { t -> t.token?.let { sameSecret(it, h.reconnectToken) } == true }
             if (seat < 0) return refuse(conn, RefuseReason.RECONNECT_EXPIRED, "Your seat is gone. Join again.")
-            seats[seat].conn?.let { out += RoomOutput.Close(it) } // a half-open old socket
-            seats[seat].conn = conn
-            seats[seat].droppedAt = null
-            welcome(seat)
-            if (phase != Phase.LOBBY) sendView(seat)
-            return
+            seats[seat].joinId = null // a token means the Welcome arrived
+            return reseat(seat, conn)
+        }
+        if (h.joinId != null) {
+            // A retry of a join whose first socket died before its Welcome: same seat, or same request, again.
+            val seat = seats.indexOfFirst { t -> t.joinId?.let { sameSecret(it, h.joinId) } == true }
+            if (seat >= 0) return reseat(seat, conn)
+            pending.firstOrNull { p -> p.joinId?.let { sameSecret(it, h.joinId) } == true }?.let { p ->
+                if (p.conn != conn) out += RoomOutput.Close(p.conn)
+                p.conn = conn
+                p.checkCode = checkCodeOf(conn)
+                return
+            }
         }
         if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
         if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
@@ -221,11 +237,32 @@ public class Room<S, M, V>(
             if (pending.size >= config.maxPendingRequests) {
                 return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
             }
-            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn))
+            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn), h.joinId)
             return
         }
-        seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn)
+        seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn).apply { joinId = h.joinId }
         welcome(seats.lastIndex)
+    }
+
+    /** The seat's player is back on [conn] (with their token, or their join id before any Welcome). */
+    private fun reseat(seat: Int, conn: String) {
+        // A bot seat that was not taken over after the reconnect window was left or kicked: nobody gets it back.
+        if (seats[seat].kind == SeatKind.BOT && !seats[seat].takenOver) {
+            return refuse(conn, RefuseReason.RECONNECT_EXPIRED, "Your seat is gone. Join again.")
+        }
+        seats[seat].conn?.takeIf { it != conn }?.let { out += RoomOutput.Close(it) } // a half-open old socket
+        seats[seat].conn = conn
+        seats[seat].droppedAt = null
+        val returning = seats[seat].takenOver
+        // Back after the window: the seat is theirs again at once and any bot plan made for it is dropped.
+        if (returning) seats[seat].apply { kind = SeatKind.PLAYER; takenOver = false }
+        welcome(seat)
+        if (returning) {
+            schedule()
+            changed()
+        } else if (phase != Phase.LOBBY) {
+            sendView(seat)
+        }
     }
 
     private fun takeRequest(id: Int) = pending.find { it.id == id }?.also { pending.remove(it) }
@@ -254,18 +291,26 @@ public class Room<S, M, V>(
         } catch (_: IllegalArgumentException) {
             return reject(seat, "Unknown move.")
         }
-        play(seat, move)
+        play(seat, move, msg.seenSeq)
     }
 
-    private fun play(seat: Int, move: M) {
+    private fun play(seat: Int, move: M, seenSeq: Int? = null) {
         val current = state
         if (phase != Phase.PLAYING || current == null) return reject(seat, "No game is running.")
         game.apply(current, seat, move).fold(
             onSuccess = {
                 state = it
-                advance()
+                advance(mover = seat)
             },
-            onFailure = { reject(seat, it.message ?: "That move is not allowed.") },
+            onFailure = {
+                if (seenSeq != null && seenSeq < seq) {
+                    // Legal on the screen the player saw, but someone else moved first: say so and show the table now.
+                    reject(seat, TOO_LATE)
+                    sendView(seat)
+                } else {
+                    reject(seat, it.message ?: "That move is not allowed.")
+                }
+            },
         )
     }
 
@@ -273,14 +318,27 @@ public class Room<S, M, V>(
         seats[seat].conn?.let { out += RoomOutput.Send(it, HostMsg.MoveRejected(message)) }
     }
 
-    /** Lobby: the seat goes away. In a game: a bot plays it from now on. */
-    private fun drop(seat: Int) {
+    /**
+     * Lobby: the seat goes away. In a game: a bot plays it from now on; after a drop past the reconnect window
+     * ([keepToken]) the player can still come back with their token and take it over again.
+     */
+    private fun drop(seat: Int, keepToken: Boolean = false) {
         if (phase == Phase.LOBBY) {
             seats.removeAt(seat)
             broadcastLobby()
             return
         }
-        seats[seat].apply { kind = SeatKind.BOT; conn = null; token = null; droppedAt = null; ready = true }
+        seats[seat].apply {
+            kind = SeatKind.BOT
+            takenOver = keepToken
+            if (!keepToken) {
+                token = null
+                joinId = null
+            }
+            conn = null
+            droppedAt = null
+            ready = true
+        }
         advance()
     }
 
@@ -292,66 +350,93 @@ public class Room<S, M, V>(
         }
         for (i in seats.indices.reversed()) {
             val at = seats[i].droppedAt ?: continue
-            if (now - at >= config.reconnectWindowMs) drop(i)
+            if (now - at >= config.reconnectWindowMs) drop(i, keepToken = true)
         }
     }
 
-    /** After the game changed: bots now (no delay) or on schedule, the turn clock, then everyone's view. */
-    private fun advance() {
+    /**
+     * After the game changed ([mover] made the move): bots now (no delay) or a planned bot move, the turn clock, then
+     * everyone's view.
+     */
+    private fun advance(mover: Int? = null) {
         if (config.botDelayMs == 0L) runBots()
-        schedule()
+        schedule(restartClockFor = mover)
         changed()
     }
 
-    /** Whose move it is decides what is due: a bot plays after [RoomConfig.botDelayMs], a human has a deadline. */
-    private fun schedule() {
+    private fun botSeats() = seats.indices.filter { seats[it].kind == SeatKind.BOT }.toSet()
+
+    /**
+     * Plans what is due against the current state. Bots: one [NearbyGame.nextBotMove] answer, played after
+     * [RoomConfig.botDelayMs] unless another move lands first (then this runs again and the plan is replaced). Clock:
+     * the human whose turn it is keeps their deadline until the turn moves to another seat or they move themselves,
+     * so an off-turn bot move (a catch) does not eat or reset their time.
+     */
+    private fun schedule(restartClockFor: Int? = null) {
+        plan = null
         botAt = null
-        turnSeat = null
-        turnDeadline = null
-        val s = state ?: return
-        if (phase != Phase.PLAYING || game.isOver(s)) return
-        val seat = game.currentSeat(s, seats.size)?.takeIf { it in seats.indices } ?: return
+        val s = state
+        if (s == null || phase != Phase.PLAYING || game.isOver(s)) {
+            turnSeat = null
+            turnDeadline = null
+            return
+        }
+        val bots = botSeats()
+        if (bots.isNotEmpty() && config.botDelayMs > 0) {
+            plan = game.nextBotMove(s, bots, seats.size)?.takeIf { it.seat in bots }
+            if (plan != null) botAt = clock() + config.botDelayMs
+        }
+        val human = game.currentSeat(s, seats.size)?.takeIf { it in seats.indices && seats[it].kind != SeatKind.BOT }
         when {
-            seats[seat].kind == SeatKind.BOT -> botAt = clock() + config.botDelayMs
-            config.turnTimeoutMs > 0 -> {
-                turnSeat = seat
+            human == null || config.turnTimeoutMs <= 0 -> {
+                turnSeat = null
+                turnDeadline = null
+            }
+            human != turnSeat || turnDeadline == null || restartClockFor == human -> {
+                turnSeat = human
                 turnDeadline = clock() + config.turnTimeoutMs
             }
         }
     }
 
-    /** Plays the one move that is due, if any: a paced bot move, or the bot move for a human whose time ran out. */
+    /**
+     * Plays the one thing that is due, the earlier first (a tie goes to the turn clock): the bots' planned move, or the
+     * bot move for a human whose time ran out. Either way the move counts as applied, so pending plans are replaced.
+     */
     private fun fireDue() {
         val now = clock()
         val s = state ?: return
         if (phase != Phase.PLAYING) return
-        val seat = when {
-            botAt?.let { now >= it } == true -> game.currentSeat(s, seats.size)?.takeIf { it in seats.indices && seats[it].kind == SeatKind.BOT }
-            turnDeadline?.let { now >= it } == true -> turnSeat
-            else -> return
-        }
-        val next = seat?.let { game.botMove(s, it) }?.let { game.apply(s, seat, it).getOrNull() }
-        if (next == null) { // the game offered nothing playable: stop the clock rather than spin on it
+        val clockDue = turnDeadline?.takeIf { now >= it }
+        val botDue = botAt?.takeIf { now >= it }
+        val (seat, move) = when {
+            clockDue != null && (botDue == null || clockDue <= botDue) -> turnSeat?.let { it to game.botMove(s, it) }
+            botDue != null -> plan?.let { it.seat to it.move }
+            else -> null
+        } ?: return
+        val next = move?.let { game.apply(s, seat, it).getOrNull() }
+        if (next == null) { // the game offered nothing playable: stop rather than spin on it
+            trace("room: due move for seat $seat was not playable; stopping the clock")
+            plan = null
             botAt = null
             turnDeadline = null
             return
         }
         state = next
-        advance()
+        advance(mover = seat)
     }
 
+    /** No delay: bots play until none wants to, at most [MAX_BOT_STEPS] moves; hitting the cap stops, never throws. */
     private fun runBots() {
         repeat(MAX_BOT_STEPS) {
-            var moved = false
-            for (i in seats.indices) {
-                val s = state ?: return
-                if (game.isOver(s)) return
-                if (seats[i].kind != SeatKind.BOT) continue
-                val move = game.botMove(s, i) ?: continue
-                game.apply(s, i, move).onSuccess { state = it; moved = true }
-            }
-            if (!moved) return
+            val s = state ?: return
+            if (game.isOver(s)) return
+            val bots = botSeats()
+            val next = game.nextBotMove(s, bots, seats.size)?.takeIf { it.seat in bots } ?: return
+            state = game.apply(s, next.seat, next.move).getOrNull()
+                ?: return trace("room: bot move for seat ${next.seat} was refused by the game; bots stop")
         }
+        trace("room: bots made $MAX_BOT_STEPS moves in a row; stopped (a game bug or an endless bot loop)")
     }
 
     /** The game changed: every seat gets its own view, and the lobby when the game ended. */
@@ -392,6 +477,7 @@ public class Room<S, M, V>(
         const val GAME_STARTED = "The game has already started."
         const val ROOM_FULL = "The room is full."
         const val MAX_BOT_STEPS = 10_000
+        const val TOO_LATE = "Too late, another player already did that."
 
         fun cleanName(raw: String, seat: Int) =
             raw.filter { !it.isISOControl() }.trim().take(MAX_NAME).ifBlank { "Player ${seat + 1}" }

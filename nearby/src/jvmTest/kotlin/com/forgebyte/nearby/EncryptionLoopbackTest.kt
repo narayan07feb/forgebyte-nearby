@@ -31,6 +31,9 @@ import kotlin.time.Duration.Companion.seconds
 
 /** Owner, 2026-11-03: every frame after the key exchange is end-to-end encrypted between joiner and host. */
 class EncryptionLoopbackTest {
+    @get:org.junit.Rule
+    val traceRecorder = TraceRecorder()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val host = NearbyHost(FakeGame(cardsEach = 6), Harness.config(), scope)
 
@@ -46,7 +49,7 @@ class EncryptionLoopbackTest {
      * is in the frame, so [captured] unmasks them like a sniffer would.
      */
     private class Tap(target: Int) {
-        private val server = ServerSocket(0)
+        private val server = ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress())
         val port: Int = server.localPort
         private val fromHost = ByteArrayOutputStream()
         private val fromJoiners = mutableListOf<ByteArrayOutputStream>()
@@ -108,7 +111,7 @@ class EncryptionLoopbackTest {
     @Test
     fun givenFullMatchThroughASniffer_whenBytesRead_thenNoCardNameTokenOrCodeInTheClear() = runBlocking<Unit> {
         withTimeout(60.seconds) {
-            val tap = Tap(host.open())
+            val tap = Tap(host.open(bindHost = LOOPBACK))
             val names = listOf("AshaVerma", "RaviKumar")
             val clients = names.map { name ->
                 client().also {
@@ -175,7 +178,7 @@ class EncryptionLoopbackTest {
     @Test
     fun givenSeatedJoiner_whenItReplaysAnEarlierFrame_thenHostClosesTheConnection() = runBlocking<Unit> {
         withTimeout(20.seconds) {
-            val port = host.open()
+            val port = host.open(bindHost = LOOPBACK)
             rawJoiner(port) { secure, send, receive ->
                 val frame = secure.seal(hello())
                 send(frame)
@@ -191,7 +194,7 @@ class EncryptionLoopbackTest {
     @Test
     fun givenChangedFirstFrame_whenHostReadsIt_thenClosedWithoutSeatOrRequest() = runBlocking<Unit> {
         withTimeout(20.seconds) {
-            val port = host.open()
+            val port = host.open(bindHost = LOOPBACK)
             rawJoiner(port) { secure, send, receive ->
                 val frame = secure.seal(hello(secret = null))
                 frame[frame.size - 1] = (frame[frame.size - 1].toInt() xor 0x40).toByte()
@@ -209,7 +212,7 @@ class EncryptionLoopbackTest {
             val timeline = java.util.Collections.synchronizedList(mutableListOf<String>())
             val t0 = kotlin.time.TimeSource.Monotonic.markNow()
             traceSink = { timeline += "${t0.elapsedNow().inWholeMilliseconds} $it" }
-            val port = host.open()
+            val port = host.open(bindHost = LOOPBACK)
             val c = client()
             c.join(JoinCode("127.0.0.1", port, Harness.SECRET, "0123456789abcdef"), "Mallory")
             assertEquals(ClientStatus.Ended(EndReason.HostKeyMismatch), c.status.first { it is ClientStatus.Ended }, "timeline $timeline")
@@ -223,7 +226,7 @@ class EncryptionLoopbackTest {
     @Test
     fun givenJoinRequest_whenBothScreensLook_thenCheckCodesMatch() = runBlocking<Unit> {
         withTimeout(20.seconds) {
-            val port = host.open()
+            val port = host.open(bindHost = LOOPBACK)
             val c = client()
             c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, "127.0.0.1", port), "Asha")
             c.status.first { it == ClientStatus.WaitingForHost }
