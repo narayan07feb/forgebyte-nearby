@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.KSerializer
 import kotlin.concurrent.Volatile
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -52,6 +53,11 @@ public class NearbyClient<M, V>(
     private val moveSerializer: KSerializer<M>,
     private val viewSerializer: KSerializer<V>,
     private val scope: CoroutineScope,
+    /**
+     * How long the first connect keeps trying. A host phone whose Wi-Fi is dozing can miss the first attempts
+     * (seen on the Lava, 2026-11-03: "Host is down" until the phone sent traffic).
+     */
+    private val firstConnectFor: Duration = 10.seconds,
 ) {
     private val http = HttpClient(CIO) {
         install(WebSockets) {
@@ -86,6 +92,7 @@ public class NearbyClient<M, V>(
      * answers or [RETRY_FOR] passes. The host decides whether the seat is still there.
      */
     private fun connect(host: String, port: Int, secret: String?, name: String): Job = scope.launch {
+        val started = TimeSource.Monotonic.markNow()
         var token: String? = null
         var droppedAt: TimeSource.Monotonic.ValueTimeMark? = null
         while (true) {
@@ -114,14 +121,20 @@ public class NearbyClient<M, V>(
                 session = null
             }
             if (leaving) end = EndReason.Left
-            val since = droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it }
-            if (end == null && (token == null || since.elapsedNow() > RETRY_FOR)) end = EndReason.Unreachable
+            if (end == null) {
+                val giveUp = if (token == null) {
+                    started.elapsedNow() > firstConnectFor
+                } else {
+                    (droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it }).elapsedNow() > RETRY_FOR
+                }
+                if (giveUp) end = EndReason.Unreachable
+            }
             end?.let {
                 _status.value = ClientStatus.Ended(it)
                 http.close()
                 return@launch
             }
-            _status.value = ClientStatus.Reconnecting
+            _status.value = if (token == null) ClientStatus.Connecting else ClientStatus.Reconnecting
             delay(1_000)
         }
     }

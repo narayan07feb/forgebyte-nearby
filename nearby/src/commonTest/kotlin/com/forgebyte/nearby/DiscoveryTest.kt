@@ -37,5 +37,7 @@ class DiscoveryTest {
         assertNull(service(txt + ("gv" to "x")).toRoomAd("fake"))
         assertNull(service(txt, addresses = emptyList()).toRoomAd("fake"))
         assertEquals("host.local", service(txt, addresses = emptyList(), host = "host.local").toRoomAd("fake")!!.host)
+        assertEquals("192.168.1.7", service(txt, addresses = listOf("fe80::1%wlan0", "192.168.1.7")).toRoomAd("fake")!!.host)
+        assertNull(service(txt, addresses = listOf("[fe80:0:0:0:3436:88ff:fe7a:3451]")).toRoomAd("fake"), "IPv6 only")
     }
 }
