@@ -79,10 +79,14 @@ public class NearbyHost<S, M, V>(
     /** Why the host's own move was refused. */
     public val rejections: SharedFlow<String> = _rejections.asSharedFlow()
 
-    /** Starts the server on [port] (0 picks a free one) and returns the port it listens on. */
-    public suspend fun open(port: Int = 0): Int {
+    /**
+     * Starts the server on [port] (0 picks a free one) and returns the port it listens on. [bindHost] is the address
+     * to listen on: all interfaces by default (joiners on the Wi-Fi); tests use "127.0.0.1" so a port held on loopback
+     * by another program on a Mac cannot answer instead of us (seen 2026-11-03: a JetBrains process answered 404).
+     */
+    public suspend fun open(port: Int = 0, bindHost: String = "0.0.0.0"): Int {
         hostKey = HostKey.create() // new for this room, kept only in memory
-        val server = embeddedServer(CIO, port = port, host = "0.0.0.0") {
+        val server = embeddedServer(CIO, port = port, host = bindHost) {
             install(WebSockets) {
                 pingPeriodMillis = PING.inWholeMilliseconds
                 timeoutMillis = PING.inWholeMilliseconds * 3 // a phone that went quiet this long is treated as dropped

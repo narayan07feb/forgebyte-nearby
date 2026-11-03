@@ -27,7 +27,7 @@ class LeaveTimingTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val host = NearbyHost(FakeGame(), Harness.config(turnTimeoutMs = 2_000, botDelayMs = 100), scope)
         try {
-            val port = host.open()
+            val port = host.open(bindHost = LOOPBACK)
             val clients = (1..2).map {
                 NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope).also { c ->
                     c.join(JoinCode("127.0.0.1", port, Harness.SECRET, host.fingerprint!!), "P$it")
