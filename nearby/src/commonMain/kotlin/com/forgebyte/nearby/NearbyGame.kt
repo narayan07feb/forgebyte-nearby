@@ -31,4 +31,16 @@ public interface NearbyGame<State, Move, SeatView> {
      * after each change (bot pacing and the turn timer need it every time).
      */
     public fun currentSeat(state: State, seatCount: Int): Int? = (0 until seatCount).firstOrNull { botMove(state, it) != null }
+
+    /**
+     * The next move any of [botSeats] wants to make now, on its turn or off it (Crazy Eights: catch an uncalled last
+     * card, jump in), or null when none does. The room asks once after every applied move and plays the answer
+     * [RoomConfig.botDelayMs] later, unless another move lands first. The default only plays the current seat's turn;
+     * a game with off-turn moves overrides it with its own bot order (uno: `Bots.nextMove`).
+     */
+    public fun nextBotMove(state: State, botSeats: Set<Int>, seatCount: Int): BotMove<Move>? =
+        currentSeat(state, seatCount)?.takeIf { it in botSeats }?.let { seat -> botMove(state, seat)?.let { BotMove(seat, it) } }
 }
+
+/** A bot seat and the move it wants to make. */
+public data class BotMove<Move>(val seat: Int, val move: Move)
