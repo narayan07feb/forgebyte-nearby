@@ -11,6 +11,22 @@ Owner decisions (2026-11-03):
 - A `nearby` session builds this module; the `uno` and `satti` sessions add "Play nearby" to their games; ceo
   coordinates and runs the phone tests.
 
+## Libraries we build on (owner pick, 2026-11-03)
+
+Owner: "instead of creating our own solution find it on github for nearby kmp support so no need to create from
+scratch". ceo searched GitHub; the owner picked:
+
+- **Discovery: `com.appstractive:dns-sd-kt`** (Appstractive/dns-sd-kt, Apache-2.0). Android NSD, iOS Bonjour and JVM
+  JmDNS behind one KMP API. The JVM side lets a Mac test client find the Lava. We do not write our own NSD or mDNS code.
+- **Connection: Ktor WebSockets** (server CIO on the host phone, client on joiners), Ktor 3.1.0 like both games. We do
+  not write our own socket framing.
+- **Ours:** the room state machine, protocol messages, `NearbyGame`, per-seat views and reconnect. No KMP library
+  covers card-game rooms with a host referee and hidden hands; kuilt and P2pKit were looked at and are too new.
+- Check before building on it: dns-sd-kt is built with Kotlin 2.3.20 and we use 2.2.20. It must resolve and compile
+  for Android (and later the iOS klib). If it does not, report to ceo; do not fork it.
+- Seat drop past the reconnect window mid-game: a host bot takes the seat; in the lobby the seat is freed (owner
+  approved 2026-11-03).
+
 ## What it is
 
 Kotlin Multiplatform library (Android now, iOS later). No internet, no Supabase, no accounts.
