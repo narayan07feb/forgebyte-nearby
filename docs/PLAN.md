@@ -171,6 +171,14 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
   module metadata, so Lint only skips that library's insides). Other options, not taken: pin dns-sd-kt 1.0.4 (Kotlin
   2.1.0, loses the Android resolve fixes including a crash below SDK 30); move games to Kotlin 2.3.20 (big, and Lint
   also needs a newer AGP); ask upstream to build against an older stdlib (a GitHub issue, owner's call).
+- **Residual risk of that exclusion** (ceo, 2026-11-03): the reflection check covered the 33 stdlib methods and fields
+  dns-sd-kt calls, and every one of the 31 `kotlin/` class names in its bytecode loads from 2.2.20 (the 4 that do
+  not are Kotlin metadata or inline debug info only, never JVM references). What is left: a stdlib method whose
+  behaviour changed between 2.2 and 2.3 (same name and signature); and a future dns-sd-kt upgrade that calls something
+  new, so rerun the check (scratchpad recipe: `javap -c -v` its classes, load each reference against the stdlib jar)
+  on every dns-sd-kt upgrade. The minified release build keeps dns-sd-kt's initializer class (ceo checked R8).
+- **Residual risk, Android:** if a future Android makes `NEARBY_WIFI_DEVICES` required for local network discovery,
+  NSD stops finding rooms until the games declare and request it (the join code still works).
 - iOS (week 3): `NSLocalNetworkUsageDescription` + `NSBonjourServices` in Info.plist.
 - Play Data safety: no new data leaves the phone (local network only); re-check before release. Satti: Families
   check (no data sent to other players beyond the display name typed in the room).
