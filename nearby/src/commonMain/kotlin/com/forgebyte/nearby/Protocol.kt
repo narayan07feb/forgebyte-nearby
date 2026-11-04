@@ -144,6 +144,12 @@ public object NearbyProtocol {
     private inline fun <T> decodeOrNull(block: () -> T): T? = try { block() } catch (_: IllegalArgumentException) { null }
 }
 
+/**
+ * A view with the seq the host gave it. A screen that draws [view] passes [seq] to `move`, so a move picked on a view
+ * that has since been replaced gets "Too late" plus the current view, and not the game's own error.
+ */
+public data class SeqView<V>(val seq: Int, val view: V)
+
 /** A running turn clock as this phone sees it: whose turn, and when it runs out on this phone's own clock. */
 public data class TurnTimer(val seat: Int, val deadline: TimeSource.Monotonic.ValueTimeMark) {
     /** Time left, never below zero; read it on each frame of a countdown. */
