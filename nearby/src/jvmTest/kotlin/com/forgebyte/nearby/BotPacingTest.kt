@@ -60,6 +60,6 @@ class BotPacingTest {
 
     private companion object {
         const val DELAY = 400L
-        const val SLACK = 300L // scheduler and CI load; still far below a second delay
+        const val SLACK = 400L // scheduler and Mac load (load 25 seen); the bound (800 ms) still fails a 981 ms late move
     }
 }
