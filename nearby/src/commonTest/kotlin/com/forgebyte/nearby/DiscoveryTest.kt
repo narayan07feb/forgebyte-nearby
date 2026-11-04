@@ -1,6 +1,10 @@
 package com.forgebyte.nearby
 
 import com.appstractive.dnssd.DiscoveredService
+import com.appstractive.dnssd.DiscoveryEvent
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -39,5 +43,46 @@ class DiscoveryTest {
         assertEquals("host.local", service(txt, addresses = emptyList(), host = "host.local").toRoomAd("fake")!!.host)
         assertEquals("192.168.1.7", service(txt, addresses = listOf("fe80::1%wlan0", "192.168.1.7")).toRoomAd("fake")!!.host)
         assertNull(service(txt, addresses = listOf("[fe80:0:0:0:3436:88ff:fe7a:3451]")).toRoomAd("fake"), "IPv6 only")
+    }
+
+    // Event order as NSD sends it (night run 2026-11-04: the first try found nothing; the logs were gone)
+
+    private val txt = roomTxt("fake", config, 3)
+    private val ipv6Only = service(txt, addresses = listOf("fe80::3436:88ff:fe7a:3451"))
+    private val ipv4 = service(txt)
+
+    private fun rooms(vararg events: DiscoveryEvent): List<List<RoomAd>> {
+        var out: List<List<RoomAd>> = emptyList()
+        runTest { out = flowOf(*events).toRooms("fake").toList() }
+        return out
+    }
+
+    @Test
+    fun givenDiscoveredThenResolved_whenRead_thenResolveAskedOnceAndRoomShows() {
+        var asked = 0
+        val out = rooms(DiscoveryEvent.Discovered(ipv6Only.copy(addresses = emptyList())) { asked++ }, DiscoveryEvent.Resolved(ipv4) {})
+        assertEquals(1, asked)
+        assertEquals(listOf(emptyList(), emptyList(), listOf("192.168.1.7")), out.map { l -> l.map { it.host } })
+    }
+
+    @Test
+    fun givenIpv6OnlyFirst_whenIpv4ComesLater_thenAskedAgainAndRoomShowsThen() {
+        var again = 0
+        val out = rooms(DiscoveryEvent.Resolved(ipv6Only) { again++ }, DiscoveryEvent.Resolved(ipv4) {})
+        assertEquals(1, again, "an IPv6-only answer asks for the address again")
+        assertEquals(listOf(emptyList(), emptyList(), listOf("192.168.1.7")), out.map { l -> l.map { it.host } })
+    }
+
+    @Test
+    fun givenOtherGameWithoutAddress_whenResolved_thenNotAskedAgain() {
+        var again = 0
+        rooms(DiscoveryEvent.Resolved(service(roomTxt("uno", config, 3), addresses = emptyList())) { again++ })
+        assertEquals(0, again)
+    }
+
+    @Test
+    fun givenRoomGoesAway_whenRemovedThenBackOnANewPort_thenListFollows() {
+        val out = rooms(DiscoveryEvent.Resolved(ipv4) {}, DiscoveryEvent.Removed(ipv4), DiscoveryEvent.Resolved(ipv4.copy(port = 40999)) {})
+        assertEquals(listOf(emptyList(), listOf(40123), emptyList(), listOf(40999)), out.map { l -> l.map { it.port } })
     }
 }
