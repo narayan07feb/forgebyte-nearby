@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -83,6 +84,7 @@ public class NearbyClient<M, V>(
     private val sendLock = Mutex() // seal and send in one step, so frame counters reach the host in order
     @Volatile private var leaving = false
     @Volatile private var lastSeq = 0
+    internal var newWifiLock: () -> WifiLatencyLock = ::newWifiLatencyLock // replaced only by tests
 
     private val _status = MutableStateFlow<ClientStatus>(ClientStatus.Connecting)
     public val status: StateFlow<ClientStatus> = _status.asStateFlow()
@@ -198,6 +200,10 @@ public class NearbyClient<M, V>(
             _status.value = if (token == null) ClientStatus.Connecting else ClientStatus.Reconnecting
             delay(1_000)
         }
+    }.also { session ->
+        // Low-latency Wi-Fi while a match runs; released when the match or this session ends, however it ends.
+        val wifi = scope.launch { holdWifiDuringMatch(lobby.map { it?.phase }, newWifiLock) }
+        session.invokeOnCompletion { wifi.cancel() }
     }
 
     /**

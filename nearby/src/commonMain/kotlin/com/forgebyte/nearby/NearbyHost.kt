@@ -58,6 +58,7 @@ public class NearbyHost<S, M, V>(
     private val jobs = mutableListOf<Job>()
     private var stopServer: (suspend () -> Unit)? = null
     internal var randomBytes: (Int) -> ByteArray = ::secureRandomBytes // replaced only by tests
+    internal var newWifiLock: () -> WifiLatencyLock = ::newWifiLatencyLock // replaced only by tests
 
     private val _lobby = MutableStateFlow(room.hostLobby)
     public val lobby: StateFlow<Lobby> = _lobby.asStateFlow()
@@ -109,6 +110,7 @@ public class NearbyHost<S, M, V>(
                 act { tick() }
             }
         }
+        jobs += scope.launch { holdWifiDuringMatch(lobby.map { it.phase }, newWifiLock) }
         return server.engine.resolvedConnectors().first().port
     }
 
