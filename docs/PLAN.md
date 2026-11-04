@@ -304,6 +304,22 @@ same Wi-Fi.** Code: main 29049bb (v0.3.2) plus the #11 test tools; APK 975,603 b
   received, not the seq of the view the move was chosen from, so a move chosen on an older view counts as current.
 - No crash from our app in the log; app uninstalled, Home pressed, Wi-Fi on, lock freed.
 
+**2026-11-04 00:25 to 00:28, two devices: Sony TV (BRAVIA VU31, Android 14, 32-bit) hosts, Lava (Android 16) joins,
+same Wi-Fi.** Build: #17 head 9cc59be, R8 `sample-host` release (1,074,667 bytes, no native code). TV room with one
+bot seat: host seat 0, bot seat 1, Lava seat 2.
+- TV discovery after `NearbyAndroid.init` (Android 14 NSD): found its own room within 2.7 s of start: PASS.
+- Lava finds and requests (`--ez find true`): found the TV room in 0.44 s, seated at 0.83 s; check code `875495` on
+  both; full match to OVER: PASS. Round trip p50 35 ms, p95 79 ms, max 79 ms (6 moves).
+- Bot pace, from the TV's turn lines (`turn 1` to the next turn): 14 gaps over 3 matches, all 1000 to 1003 ms: PASS.
+- 30 s countdown: the Lava waited 40 s per move; TV `turn 2` at 00:26:15.583, next turn at 00:26:45.583, exactly
+  30,000 ms; the Lava saw 29,997 ms left: PASS. Its late move got "You do not hold that card." (this build does not
+  have #16; the sample calls `move(move)`).
+- Wi-Fi drop on the Lava only (8 s; never the TV, it carries adb): Reconnecting, back in 10.2 s, finished: PASS. Round
+  trip p50 72 ms, p95 257 ms around the drop.
+- TV host leaves mid-match: `leave()` 66 ms on the TV; the Lava ended HostLeft: PASS.
+- No crash lines on either device. Home on both; uninstalled from the Lava (the TV copy was removed at about 07:07,
+  owner rule: uninstall from the TV after each test); Lava Wi-Fi on; lock freed.
+
 ## Rules for this repo
 
 - No GitHub Actions; tests run locally (`./gradlew allTests` or the ci-local lane).
