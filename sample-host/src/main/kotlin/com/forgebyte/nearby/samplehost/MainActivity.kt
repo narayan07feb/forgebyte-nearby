@@ -87,12 +87,12 @@ class MainActivity : Activity() {
             }
             launch {
                 var lastTurn = -1
-                room.view.filterNotNull().collect { v ->
+                room.seqView.filterNotNull().collect { (seq, v) ->
                     // With a bot seat, log each turn change: the bot is seat 1 (added before any joiner), so logcat time from "turn 1" to the next line is its pace.
                     if (bots > 0 && v.turn != lastTurn) { lastTurn = v.turn; say("turn ${v.turn}") }
                     if (v.turn == 0 && v.hand.isNotEmpty()) {
                         delay(100) // like a player's tap, so joiners see each step
-                        room.move(DemoMove(v.hand.first()))
+                        room.move(DemoMove(v.hand.first()), seenSeq = seq)
                     }
                 }
             }
