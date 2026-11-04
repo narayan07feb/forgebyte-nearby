@@ -33,7 +33,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.Volatile
-import kotlin.random.Random
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -58,6 +57,7 @@ public class NearbyHost<S, M, V>(
     private var nextConn = 0
     private val jobs = mutableListOf<Job>()
     private var stopServer: (suspend () -> Unit)? = null
+    internal var randomBytes: (Int) -> ByteArray = ::secureRandomBytes // replaced only by tests
 
     private val _lobby = MutableStateFlow(room.hostLobby)
     public val lobby: StateFlow<Lobby> = _lobby.asStateFlow()
@@ -137,7 +137,12 @@ public class NearbyHost<S, M, V>(
     public suspend fun declineJoin(id: Int): Unit = act { declineJoin(id) }
     public suspend fun addBot(): Unit = act { addBot() }
     public suspend fun kick(seat: Int): Unit = act { kick(seat) }
-    public suspend fun startGame(seed: Long = Random.nextLong()): Unit = act { start(seed) }
+    /**
+     * Deals and starts the match. [seed] shuffles the deal, so it must stay secret: anyone who can guess it can
+     * rebuild every hand. The default takes 64 bits from the platform's secure random source. Pass a seed only for
+     * tests and replays, or make it with a secure source (`java.security.SecureRandom`), never `kotlin.random.Random`.
+     */
+    public suspend fun startGame(seed: Long = randomBytes(SEED_BYTES).toSeed()): Unit = act { start(seed) }
     /** [seenSeq]: the seq of the view the move was picked on ([SeqView.seq]); see [NearbyClient.move]. */
     public suspend fun move(move: M, seenSeq: Int = hostSeq): Unit = act { hostMove(move, seenSeq) }
 
