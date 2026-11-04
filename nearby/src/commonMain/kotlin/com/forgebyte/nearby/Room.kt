@@ -497,4 +497,9 @@ internal fun secureToken(): String = secureRandomBytes(16).toHex()
 
 internal expect fun secureRandomBytes(size: Int): ByteArray
 
+internal const val SEED_BYTES = 8
+
+/** The bytes as one big-endian Long (8 bytes fill it): a deal seed from [secureRandomBytes]. */
+internal fun ByteArray.toSeed(): Long = fold(0L) { acc, b -> (acc shl 8) or (b.toLong() and 0xff) }
+
 internal fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
