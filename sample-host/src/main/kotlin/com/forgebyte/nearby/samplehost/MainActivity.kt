@@ -11,6 +11,7 @@ import com.forgebyte.nearby.NearbyAndroid
 import com.forgebyte.nearby.NearbyHost
 import com.forgebyte.nearby.RoomConfig
 import com.forgebyte.nearby.demo.DemoGame
+import com.forgebyte.nearby.discoverRooms
 import com.forgebyte.nearby.demo.DemoMove
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,15 @@ class MainActivity : Activity() {
             val port = room.open()
             say("listening on port $port, join codes ${room.joinCodes(port)}")
             launch { room.advertise(port) }
+            // `--ez bot true`: one bot seat, so a match tests bot pacing (botDelayMs); it starts once a joiner is in too.
+            val bots = if (intent.getBooleanExtra("bot", false)) 1 else 0
+            if (bots > 0) room.addBot()
+            // `--ez discover true`: also run Android discovery (NSD) and log what it finds, to test that path on a phone.
+            if (intent.getBooleanExtra("discover", false)) launch {
+                discoverRooms(DemoGame.ID).collect { rooms ->
+                    rooms.forEach { say("discovered '${it.roomName}' at ${it.host}:${it.port}, free ${it.seatsFree}, canJoin ${it.canJoin(DemoGame.VERSION)}") }
+                }
+            }
             launch {
                 room.joinRequests.collect { list ->
                     list.forEach { say("request ${it.id} from ${it.name}, check code ${it.checkCode}: accepting"); room.acceptJoin(it.id) }
@@ -55,14 +65,17 @@ class MainActivity : Activity() {
             }
             launch {
                 room.canStart.collect { ready ->
-                    if (ready && room.lobby.value.seats.size >= 2) {
+                    if (ready && room.lobby.value.seats.size >= 2 + bots) {
                         say("starting")
                         room.startGame()
                     }
                 }
             }
             launch {
+                var lastTurn = -1
                 room.view.filterNotNull().collect { v ->
+                    // With a bot seat, log each turn change: the bot is seat 1 (added before any joiner), so logcat time from "turn 1" to the next line is its pace.
+                    if (bots > 0 && v.turn != lastTurn) { lastTurn = v.turn; say("turn ${v.turn}") }
                     if (v.turn == 0 && v.hand.isNotEmpty()) {
                         delay(100) // like a player's tap, so joiners see each step
                         room.move(DemoMove(v.hand.first()))
