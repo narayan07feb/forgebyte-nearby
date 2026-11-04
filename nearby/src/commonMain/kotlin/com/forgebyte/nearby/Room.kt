@@ -4,6 +4,10 @@ package com.forgebyte.nearby
 public const val HOST_CONN: String = "host"
 
 public class RoomConfig(
+    /**
+     * The room's label in the discovery advert. It goes unencrypted to every device on the local network: never put
+     * a player name here; use a neutral label such as the game name and a short random word.
+     */
     public val roomName: String,
     public val hostName: String,
     public val gameVersion: Int,
