@@ -7,12 +7,14 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.ScrollView
 import android.widget.TextView
+import com.forgebyte.nearby.JoinCode
 import com.forgebyte.nearby.NearbyAndroid
 import com.forgebyte.nearby.NearbyHost
 import com.forgebyte.nearby.RoomConfig
 import com.forgebyte.nearby.demo.DemoGame
 import com.forgebyte.nearby.discoverRooms
 import com.forgebyte.nearby.demo.DemoMove
+import com.forgebyte.nearby.demo.playAsJoiner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
@@ -22,10 +24,10 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import java.security.SecureRandom
 
-/** Hosts a demo room, logs everything to the screen and to logcat (tag NearbyDemo). */
+/** Hosts a demo room (or joins one), logs everything to the screen and to logcat (tag NearbyDemo). */
 class MainActivity : Activity() {
     private val scope = MainScope()
-    private lateinit var host: NearbyHost<*, DemoMove, *>
+    private var host: NearbyHost<*, DemoMove, *>? = null
     private lateinit var log: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,6 +36,18 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(log) })
 
         NearbyAndroid.init(this) // nearby play opens here; nothing ran at app start
+        // `--es join <code>` or `--ez find true`: play as a joiner (by code, or the first room found nearby) instead of
+        // hosting; `--ei think <ms>` waits before each own move (default 700).
+        val joinCode = intent.getStringExtra("join")
+        if (joinCode != null || intent.getBooleanExtra("find", false)) {
+            val parsed = joinCode?.let(JoinCode::parse)
+            scope.launch {
+                if (joinCode != null && parsed == null) return@launch say("FAIL bad join code $joinCode")
+                val ok = playAsJoiner(parsed, Build.MODEL, intent.getIntExtra("think", 700).toLong(), ::say)
+                say("joiner ${if (ok) "PASS" else "FAIL"}")
+            }
+            return
+        }
         val code = (100_000 + SecureRandom().nextInt(900_000)).toString()
         val room = NearbyHost(
             DemoGame(),
@@ -90,7 +104,7 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra("leave", false)) scope.launch {
             val t0 = android.os.SystemClock.elapsedRealtime()
-            host.leave()
+            host?.leave()
             say("host left the room in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
         }
     }
@@ -99,13 +113,13 @@ class MainActivity : Activity() {
         super.onDestroy()
         val s = scope
         CoroutineScope(Dispatchers.Default).launch {
-            host.leave()
+            host?.leave()
             s.cancel()
         }
     }
 
     private fun say(text: String) {
         Log.i("NearbyDemo", text)
-        log.append(text + "\n")
+        runOnUiThread { log.append(text + "\n") } // the joiner reports from background threads
     }
 }
