@@ -11,6 +11,11 @@ public class RoomConfig(
     public val roomName: String,
     public val hostName: String,
     public val gameVersion: Int,
+    /**
+     * The secret in the full join code ([JoinCode], QR or typed). Anyone who has the full code gets a seat with no host
+     * approval and no check code, until the game starts or the room is full. Make it with a secure random source, and
+     * share the code only in person or by QR.
+     */
     public val roomSecret: String,
     public val maxSeats: Int,
     public val minSeats: Int = 2,
