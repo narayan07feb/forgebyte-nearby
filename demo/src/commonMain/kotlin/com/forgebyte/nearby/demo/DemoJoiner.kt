@@ -58,12 +58,14 @@ public suspend fun playAsJoiner(code: JoinCode?, name: String, thinkMs: Long, sa
         scope.launch { client.turnTimer.collect { t -> if (t != null) say("turn clock: seat ${t.seat}, ${t.remaining.inWholeMilliseconds} ms left") } }
         scope.launch { client.rejections.collect { say("move refused: $it") } }
         scope.launch {
-            combine(client.view.filterNotNull(), client.status) { v, s -> v to s }.collect { (v, s) ->
+            combine(client.seqView.filterNotNull(), client.status) { sv, s -> sv to s }.collect { (sv, s) ->
+                val v = sv.view
                 sentAt?.let { rtts += it.elapsedNow(); sentAt = null } // first view after our move answers it
                 if (s == ClientStatus.Connected && v.turn == client.lobby.value!!.yourSeat && v.hand.isNotEmpty()) {
                     delay(thinkMs)
                     sentAt = TimeSource.Monotonic.markNow()
-                    if (!client.move(DemoMove(v.hand.first()))) sentAt = null
+                    // The seq of the view this move was picked on: if the turn clock played first, the host says "Too late".
+                    if (!client.move(DemoMove(v.hand.first()), seenSeq = sv.seq)) sentAt = null
                 }
             }
         }
