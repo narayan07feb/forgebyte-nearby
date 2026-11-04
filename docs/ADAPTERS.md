@@ -55,3 +55,8 @@ Mark every seat `isHuman = true` so `applyMove` never switches to `BotThinking`;
   first, then asks again. Satti keeps the default (current seat only).
 - **Race results:** `apply` just refuses a move that is no longer legal; the room tells a player who lost a race "Too
   late, another player already did that." and sends a fresh view. Do not add your own race handling.
+- **Which view the move was picked on (after v0.3.2):** draw the table from `seqView` (`SeqView(seq, view)`, on both
+  `NearbyHost` and `NearbyClient`) and send moves with `move(move, seenSeq = shown.seq)`, where `shown` is the
+  `SeqView` the player was looking at. A newer view can arrive between drawing and the tap (the turn timer played for
+  the player, a bot caught a card); with the seq the room answers "Too late" instead of the game's own error.
+  Without it, `move(move)` uses the newest view received, as before.

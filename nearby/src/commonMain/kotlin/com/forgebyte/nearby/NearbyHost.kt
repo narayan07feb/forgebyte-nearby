@@ -32,6 +32,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.concurrent.Volatile
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -51,7 +52,7 @@ public class NearbyHost<S, M, V>(
     private val lock = Mutex()
     private val outboxes = mutableMapOf<String, Channel<String>>()
     private var hostKey: HostKey? = null
-    private var hostSeq = 0 // seq of the host's own latest view, sent with its moves
+    @Volatile private var hostSeq = 0 // seq of the host's own latest view, the default for move()
     internal val fingerprint: String? get() = hostKey?.fingerprint
     private val writers = mutableSetOf<Job>()
     private var nextConn = 0
@@ -63,6 +64,10 @@ public class NearbyHost<S, M, V>(
 
     private val _view = MutableStateFlow<V?>(null)
     public val view: StateFlow<V?> = _view.asStateFlow()
+
+    private val _seqView = MutableStateFlow<SeqView<V>?>(null)
+    /** [view] with its seq, as one value: draw from this and pass its seq to [move]. */
+    public val seqView: StateFlow<SeqView<V>?> = _seqView.asStateFlow()
 
     private val _canStart = MutableStateFlow(false)
     public val canStart: StateFlow<Boolean> = _canStart.asStateFlow()
@@ -133,7 +138,8 @@ public class NearbyHost<S, M, V>(
     public suspend fun addBot(): Unit = act { addBot() }
     public suspend fun kick(seat: Int): Unit = act { kick(seat) }
     public suspend fun startGame(seed: Long = Random.nextLong()): Unit = act { start(seed) }
-    public suspend fun move(move: M): Unit = act { hostMove(move, seenSeq = hostSeq) }
+    /** [seenSeq]: the seq of the view the move was picked on ([SeqView.seq]); see [NearbyClient.move]. */
+    public suspend fun move(move: M, seenSeq: Int = hostSeq): Unit = act { hostMove(move, seenSeq) }
 
     /** Ends the room for everyone, then stops the server. */
     public suspend fun leave() {
@@ -223,7 +229,9 @@ public class NearbyHost<S, M, V>(
             is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
             is HostMsg.View -> {
                 hostSeq = msg.seq
-                _view.value = NearbyProtocol.json.decodeFromJsonElement(game.viewSerializer, msg.view)
+                val v = NearbyProtocol.json.decodeFromJsonElement(game.viewSerializer, msg.view)
+                _seqView.value = SeqView(msg.seq, v)
+                _view.value = v
                 _turnTimer.value = TurnTimer.from(msg.turn)
             }
             is HostMsg.MoveRejected -> _rejections.tryEmit(msg.message)
