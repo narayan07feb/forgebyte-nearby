@@ -317,8 +317,8 @@ bot seat: host seat 0, bot seat 1, Lava seat 2.
 - Wi-Fi drop on the Lava only (8 s; never the TV, it carries adb): Reconnecting, back in 10.2 s, finished: PASS. Round
   trip p50 72 ms, p95 257 ms around the drop.
 - TV host leaves mid-match: `leave()` 66 ms on the TV; the Lava ended HostLeft: PASS.
-- No crash lines on either device. Home on both; uninstalled from the Lava (the TV copy was removed at 07:20, owner
-  rule: uninstall from the TV after each test); Lava Wi-Fi on; lock freed.
+- No crash lines on either device. Home on both; uninstalled from the Lava (the TV copy was removed at about 07:07,
+  owner rule: uninstall from the TV after each test); Lava Wi-Fi on; lock freed.
 
 ## Rules for this repo
 
