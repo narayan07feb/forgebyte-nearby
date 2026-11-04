@@ -7,7 +7,7 @@ uno and satti and start implementation from today", "please create a module so b
 Owner decisions (2026-11-03):
 - One shared module in its own repo (`narayan07feb/forgebyte-nearby`), versioned by git tag and pulled from JitPack,
   the same way Crazy Eights uses FrameReady.
-- Android first; iOS in week 3.
+- Android first; iOS after Android production (parked to January 2027, see the week 3 decision below).
 - A `nearby` session builds this module; the `uno` and `satti` sessions add "Play nearby" to their games; ceo
   coordinates and runs the phone tests.
 
@@ -30,7 +30,7 @@ scratch". ceo searched GitHub; the owner picked:
   24). Decision (ceo, option A): use 1.1.2 now, since weeks 1 and 2 are Android only. iOS is decided in week 3: ceo
   leans to moving uno and satti to Kotlin 2.3.20 then (this also unblocks firebase-bom 35); pinning 1.0.4 for iOS is
   the fallback.
-- **Week 3 proposal (nearby, 2026-11-04): dns-sd-kt for iOS. Waiting for ceo and the owner; nothing changed yet.**
+- **Week 3 decision (ceo, 2026-11-04): A, parked until January 2027.** Proposal (nearby, 2026-11-04):
   1.1.2 is still the newest release (1 Nov 2026), and it is the one with the Android below SDK 30 resolve-crash fix.
   1.0.4 is the last build made with Kotlin 2.1; 1.0.5 and later are built with Kotlin 2.3. Two local probes on
   `week3/ios-targets` (`iosArm64` + `iosSimulatorArm64` added, nothing committed with a version change):
@@ -49,6 +49,11 @@ scratch". ceo searched GitHub; the owner picked:
     browse with the old NSNetServiceBrowser instead of NWBrowser (1.1.0).
   - Also for iOS, either way: the crypto provider is `cryptography-provider-cryptokit` 0.5.0 (CryptoKit: ECDH P-256,
     HKDF, AES-GCM, SHA-256). The CommonCrypto ("apple") provider has no ECDH and no AES-GCM. New dependency, iOS only.
+  - **Decision (ceo, 2026-11-04):** A, and `cryptography-provider-cryptokit` 0.5.0 approved for `iosMain`. Not now:
+    iOS comes after Android production (Crazy Eights January to February 2027, Satti March), and moving uno and satti to
+    Kotlin 2.3 before the 31 December Play deadline is risk with no gain. Branch `week3/ios-targets` (PR #24) holds
+    Kotlin 2.3.20, the iOS targets and the iOS code; it stays a draft and does not merge or tag until ceo says so. main
+    and the v0.3.x line stay on Kotlin 2.2.20, and no game changes Kotlin now.
 - Side effects of dns-sd-kt 1.1.2 inside a game: kotlin-stdlib goes up to 2.3.20, and appcompat 1.7.1 and
   androidx.startup 1.2.0 are added at runtime. The uno session checks these inside its app when it adds 0.1.0.
 - Seat drop past the reconnect window mid-game: a host bot takes the seat; in the lobby the seat is freed (owner
@@ -229,7 +234,7 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 | Week 1 (3 Nov) | nearby | End-to-end encryption (owner moved it to now): P-256 ECDH + HKDF + AES-GCM, fingerprint in the code, check code for list joins; tag `0.2.0` (wire-incompatible with 0.1.0). Release blocker: no store release with nearby play without it |
 | Week 2 | nearby | Bot pacing + turn timer (owner, 3 Nov), tag `0.3.0` (wire-compatible with 0.2.0) |
 | Week 2 | nearby | Battery/heat check, Wi-Fi low-latency lock for slow moves, second real phone (test 4c) |
-| Week 3 | nearby + games | iOS (Bonjour, Local network permission), Data safety, closed-test release |
+| Week 3 | nearby + games | Data safety, closed-test release. iOS (Bonjour, Local network permission) is parked to January 2027, after Android production (ceo, 2026-11-04) |
 
 ## How we test
 

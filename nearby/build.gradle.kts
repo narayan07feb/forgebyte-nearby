@@ -7,7 +7,8 @@ plugins {
     id("maven-publish")
 }
 
-// Android for the games; JVM for the Mac loopback tests and the Mac test client. iOS comes in week 3 (docs/PLAN.md).
+// Android for the games; JVM for the Mac loopback tests and the Mac test client; iOS (device and Apple-silicon
+// simulator) from week 3 (docs/PLAN.md), compiled only so far: no Swift app yet.
 kotlin {
     explicitApi()
 
@@ -17,6 +18,10 @@ kotlin {
     }
     jvm {
         compilerOptions { jvmTarget.set(JvmTarget.JVM_11) }
+    }
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { ios ->
+        // The CryptoKit provider is Swift: binaries (the test runner too) load its runtime from the system Swift folder.
+        ios.binaries.all { linkerOpts("-rpath", "/usr/lib/swift") }
     }
 
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
@@ -35,13 +40,7 @@ kotlin {
             api(libs.kotlinx.coroutines.core)
             // dns-sd-kt lists appcompat but never uses it; appcompat would add emoji2 and other start-up initializers
             // to every game. Its code needs only androidx.core (added in androidMain).
-            // It is also built with Kotlin 2.3.20 and would lift every game's kotlin-stdlib to 2.3.20, which AGP 8.9 Lint
-            // cannot read. All 33 stdlib methods it calls exist in 2.2.20 (checked with reflection, 2026-11-03), so the
-            // games' own stdlib serves it.
-            implementation(libs.dns.sd.get().toString()) {
-                exclude(group = "androidx.appcompat")
-                exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
-            }
+            implementation(libs.dns.sd.get().toString()) { exclude(group = "androidx.appcompat") }
             implementation(libs.ktor.server.cio)
             implementation(libs.ktor.server.websockets)
             implementation(libs.ktor.client.cio)
@@ -54,6 +53,7 @@ kotlin {
         }
         // Code shared by the two JVM-based targets (java.security, java.net); see the hierarchy below.
         getByName("jvmSharedMain").dependencies { implementation(libs.cryptography.provider.jdk) }
+        iosMain.dependencies { implementation(libs.cryptography.provider.cryptokit) }
         androidMain.dependencies {
             implementation(libs.androidx.startup)
             implementation(libs.androidx.core)
