@@ -89,6 +89,17 @@ class ShortCodeTest {
     }
 
     @Test
+    fun givenWifiAndHotspotOrVpn_whenAddressesOrdered_thenWifiComesFirstAndPicksTheHostsNetwork() {
+        val hotspotAndWifi = listOf("ap0" to "192.168.43.1", "wlan0" to "192.168.1.12")
+        assertEquals(listOf("192.168.1.12", "192.168.43.1"), wifiFirst(hotspotAndWifi))
+        assertEquals("192.168.1.7", wifiFirst(hotspotAndWifi).firstNotNullOfOrNull(ShortCode(7, 40123)::hostOn))
+        assertEquals(listOf("10.0.0.4", "10.8.0.2"), wifiFirst(listOf("utun3" to "10.8.0.2", "en0" to "10.0.0.4")))
+        assertEquals(listOf("192.168.1.5", "172.16.0.9", "10.8.0.2"),
+            wifiFirst(listOf("rmnet0" to "172.16.0.9", "wlan0" to "192.168.1.5", "tun0" to "10.8.0.2")), "others keep their order")
+        assertEquals(emptyList(), wifiFirst(emptyList()))
+    }
+
+    @Test
     fun givenJoinerAddress_whenHostLookedUp_thenSameFirstThreeBytesAndTheCodesLastByte() {
         assertEquals("192.168.43.7", ShortCode(7, 40123).hostOn("192.168.43.12"))
         assertEquals("10.0.0.200", ShortCode(200, 1).hostOn("10.0.0.5"))
