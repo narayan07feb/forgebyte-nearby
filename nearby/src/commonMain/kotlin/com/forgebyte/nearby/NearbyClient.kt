@@ -115,6 +115,21 @@ public class NearbyClient<M, V>(
     public fun requestJoin(room: RoomAd, name: String): Job = connect(room.host, room.port, secret = null, fingerprint = null, name)
 
     /**
+     * Asks the room behind a typed [ShortCode] to let us in, exactly like [requestJoin] for a room found nearby: the
+     * host accepts or declines, and both sides show [checkCode]. The host is looked for on this device's Wi-Fi network
+     * (same first three address bytes). Ends [EndReason.Unreachable] when this device has no Wi-Fi address or the room
+     * is not on its network.
+     */
+    public fun requestJoin(code: ShortCode, name: String): Job {
+        val host = myAddresses().firstNotNullOfOrNull(code::hostOn)
+            ?: return scope.launch { _status.value = ClientStatus.Ended(EndReason.Unreachable); http.close() }
+        return connect(host, code.port, secret = null, fingerprint = null, name)
+    }
+
+    /** This device's site-local IPv4 addresses; tests point it at loopback. */
+    internal var myAddresses: () -> List<String> = ::localAddresses
+
+    /**
      * Connects and keeps the seat: after a drop it reconnects with the seat's token every second, until the host
      * answers or [RETRY_FOR] passes. The host decides whether the seat is still there.
      */
