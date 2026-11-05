@@ -96,6 +96,9 @@ class ShortCodeTest {
         assertEquals(listOf("10.0.0.4", "10.8.0.2"), wifiFirst(listOf("utun3" to "10.8.0.2", "en0" to "10.0.0.4")))
         assertEquals(listOf("192.168.1.5", "172.16.0.9", "10.8.0.2"),
             wifiFirst(listOf("rmnet0" to "172.16.0.9", "wlan0" to "192.168.1.5", "tun0" to "10.8.0.2")), "others keep their order")
+        // The Lava's names (ceo, read-only ip addr, 2026-11-05): mobile data seth_lte*, VoWiFi vowifi_tun*, Wi-Fi wlan0.
+        assertEquals(listOf("192.168.0.103", "10.120.4.7", "10.66.0.2"),
+            wifiFirst(listOf("seth_lte0" to "10.120.4.7", "vowifi_tun0" to "10.66.0.2", "wlan0" to "192.168.0.103")))
         assertEquals(emptyList(), wifiFirst(emptyList()))
     }
 
