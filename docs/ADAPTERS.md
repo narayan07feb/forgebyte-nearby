@@ -20,6 +20,20 @@ v0.2.0 or later). The host phone is the referee: it keeps the full state, applie
    seats the room asks through `botMove`.
 6. **`isOver`** is true exactly when the game has ended (the room then shows `Phase.OVER`).
 
+## Ways to join (screens)
+
+- **Room found nearby:** `discoverRooms(gameId)` lists rooms; `requestJoin(room, name)` sends a join request.
+- **Short code:** the host shows `host.shortCodes(port)` (six characters, such as `K7Q-2MX`); the joiner types it and
+  calls `NearbyClient.requestJoin(ShortCode.parse(text) ?: return, name)`. It only finds the host on the joiner's own
+  Wi-Fi (same first three address bytes) and carries no secret, so it is a join request too: the host accepts or
+  declines it and both screens show the same check code. A null from `parse` means a typo: ask the player to check the
+  code. It ends `EndReason.Unreachable` when the phones are on different networks.
+- **Full code or QR:** `host.joinCodes(port)` and `NearbyClient.join(code, name)`. It holds the room secret, so it
+  seats the joiner with no host approval: show it only to the people at the table.
+
+For a request (nearby or short code), show `checkCode` on the joiner while it waits, and the request's `checkCode`
+next to Accept/Decline on the host.
+
 ## Satti: fit check (read-only, 2026-11-03, satti main)
 
 `shared/.../domain`: `GameEngine`, `GameState` (serializable), `Card(suit, value)`, `SuitPile`, `SmartAI`, `EasyAI`.

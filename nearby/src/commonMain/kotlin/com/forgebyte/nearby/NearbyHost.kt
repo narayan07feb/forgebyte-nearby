@@ -119,6 +119,12 @@ public class NearbyHost<S, M, V>(
     }
 
     /**
+     * Six-character codes ([ShortCode]) a joiner types to find this room on the same Wi-Fi, one per local address.
+     * A short-code join is a join request: it waits in [joinRequests] for [acceptJoin], like a room found nearby.
+     */
+    public fun shortCodes(port: Int): List<ShortCode> = localAddresses().mapNotNull { ShortCode.of(it, port) }
+
+    /**
      * Advertises the room on the local network until the calling coroutine is cancelled, updating the free-seat
      * count as it changes. A joiner who taps it sends a join request; see [joinRequests].
      */
