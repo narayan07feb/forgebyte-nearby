@@ -58,6 +58,7 @@ public class NearbyHost<S, M, V>(
     private var stopServer: (suspend () -> Unit)? = null
     private val wake = Channel<Unit>(Channel.CONFLATED) // tells the ticker to read the room's next wake time again
     internal var randomBytes: (Int) -> ByteArray = ::secureRandomBytes // replaced only by tests
+    internal var newWifiLock: () -> WifiLatencyLock = ::newWifiLatencyLock // replaced only by tests
 
     private val _lobby = MutableStateFlow(room.hostLobby)
     public val lobby: StateFlow<Lobby> = _lobby.asStateFlow()
@@ -111,6 +112,7 @@ public class NearbyHost<S, M, V>(
                 wake.tryReceive() // this tick's own signal; the next wait is read fresh under the lock
             }
         }
+        jobs += scope.launch { holdWifiDuringMatch(lobby.map { it.phase }, newWifiLock) }
         return server.engine.resolvedConnectors().first().port
     }
 
