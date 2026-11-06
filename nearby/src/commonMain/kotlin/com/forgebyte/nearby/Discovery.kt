@@ -5,6 +5,7 @@ import com.appstractive.dnssd.DiscoveryEvent
 import com.appstractive.dnssd.discoverServices
 import com.appstractive.dnssd.key
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 
 /** The DNS-SD service type every ForgeByte room advertises (Android NSD, iOS Bonjour, JVM JmDNS via dns-sd-kt). */
@@ -75,9 +76,14 @@ internal const val MAX_ROOM_NAME = 40
 /** Rooms of [gameId] on the local network, updated as they appear, change and go away. */
 public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
     ensureDiscoveryReady()
+    emitAll(discoverServices(SERVICE_TYPE).toRooms(gameId))
+}
+
+/** The rooms of [gameId] seen in dns-sd [DiscoveryEvent]s; starts with an empty list. */
+internal fun Flow<DiscoveryEvent>.toRooms(gameId: String): Flow<List<RoomAd>> = flow {
     val found = mutableMapOf<String, RoomAd>()
     emit(emptyList())
-    discoverServices(SERVICE_TYPE).collect { event ->
+    collect { event ->
         when (event) {
             is DiscoveryEvent.Discovered -> event.resolve() // addresses arrive with Resolved
             is DiscoveryEvent.Resolved -> {
