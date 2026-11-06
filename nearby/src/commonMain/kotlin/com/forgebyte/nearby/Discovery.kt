@@ -4,9 +4,12 @@ import com.appstractive.dnssd.DiscoveredService
 import com.appstractive.dnssd.DiscoveryEvent
 import com.appstractive.dnssd.discoverServices
 import com.appstractive.dnssd.key
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 
 /** The DNS-SD service type every ForgeByte room advertises (Android NSD, iOS Bonjour, JVM JmDNS via dns-sd-kt). */
 public const val SERVICE_TYPE: String = "_forgebyte._tcp"
@@ -79,7 +82,12 @@ public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
     emitAll(discoverServices(SERVICE_TYPE).toRooms(gameId))
 }
 
-/** The rooms of [gameId] seen in dns-sd [DiscoveryEvent]s; starts with an empty list. */
+/**
+ * The rooms of [gameId] seen in dns-sd [DiscoveryEvent]s; starts with an empty list. The events and this mapping run on
+ * [Dispatchers.IO], never on the collector's thread: on Android below 14, dns-sd-kt looks up each room's host name
+ * (reverse DNS) where the flow runs, and on the main thread that crashed the app (NetworkOnMainThreadException, Mi A3,
+ * Android 11, 7 Nov 2026).
+ */
 internal fun Flow<DiscoveryEvent>.toRooms(gameId: String): Flow<List<RoomAd>> = flow {
     val found = mutableMapOf<String, RoomAd>()
     emit(emptyList())
@@ -96,7 +104,7 @@ internal fun Flow<DiscoveryEvent>.toRooms(gameId: String): Flow<List<RoomAd>> = 
         }
         emit(found.values.toList())
     }
-}
+}.flowOn(Dispatchers.IO)
 
 internal fun DiscoveredService.toRoomAd(gameId: String): RoomAd? {
     fun text(key: String) = txt[key]?.decodeToString()
