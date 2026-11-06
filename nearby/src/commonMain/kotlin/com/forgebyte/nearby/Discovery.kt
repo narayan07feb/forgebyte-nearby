@@ -119,5 +119,12 @@ internal fun DiscoveredService.toRoomAd(gameId: String): RoomAd? {
 /** Android: throws until NearbyAndroid.init(context) ran. Elsewhere nothing to do. */
 internal expect fun ensureDiscoveryReady()
 
-/** Site-local IPv4 addresses of this device, for the join code. */
+/** Site-local IPv4 addresses of this device, Wi-Fi first ([wifiFirst]), for the join and short codes. */
 internal expect fun localAddresses(): List<String>
+
+/**
+ * Addresses as (interface name, address) pairs, Wi-Fi first: wlan* on Android, en0 on a Mac. Then the rest (a hotspot
+ * the phone hosts, a VPN) in the order given, so a joiner on both picks its Wi-Fi network for a short code.
+ */
+internal fun wifiFirst(addresses: List<Pair<String, String>>): List<String> =
+    addresses.sortedBy { (name, _) -> if (name.startsWith("wlan") || name == "en0") 0 else 1 }.map { it.second }

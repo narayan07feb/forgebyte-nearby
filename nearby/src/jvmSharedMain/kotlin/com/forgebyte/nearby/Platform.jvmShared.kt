@@ -13,9 +13,10 @@ internal actual fun secureRandomBytes(size: Int): ByteArray = ByteArray(size).al
 /** The platform's own crypto (Android: Conscrypt/BoringSSL; JVM: SunEC and SunJCE). No BouncyCastle. */
 internal actual val cryptoProvider: CryptographyProvider = CryptographyProvider.JDK()
 
-internal actual fun localAddresses(): List<String> =
+internal actual fun localAddresses(): List<String> = wifiFirst(
     NetworkInterface.getNetworkInterfaces().toList()
         .filter { it.isUp && !it.isLoopback }
-        .flatMap { it.inetAddresses.toList() }
-        .filter { it is Inet4Address && it.isSiteLocalAddress }
-        .mapNotNull { it.hostAddress }
+        .flatMap { nif -> nif.inetAddresses.toList().map { nif.name to it } }
+        .filter { (_, address) -> address is Inet4Address && address.isSiteLocalAddress }
+        .mapNotNull { (name, address) -> address.hostAddress?.let { name to it } },
+)
