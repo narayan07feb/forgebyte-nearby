@@ -7,7 +7,7 @@ uno and satti and start implementation from today", "please create a module so b
 Owner decisions (2026-11-03):
 - One shared module in its own repo (`narayan07feb/forgebyte-nearby`), versioned by git tag and pulled from JitPack,
   the same way Crazy Eights uses FrameReady.
-- Android first; iOS in week 3.
+- Android first; iOS after Android production (parked to January 2027, see the week 3 decision below).
 - A `nearby` session builds this module; the `uno` and `satti` sessions add "Play nearby" to their games; ceo
   coordinates and runs the phone tests.
 
@@ -30,6 +30,30 @@ scratch". ceo searched GitHub; the owner picked:
   24). Decision (ceo, option A): use 1.1.2 now, since weeks 1 and 2 are Android only. iOS is decided in week 3: ceo
   leans to moving uno and satti to Kotlin 2.3.20 then (this also unblocks firebase-bom 35); pinning 1.0.4 for iOS is
   the fallback.
+- **Week 3 decision (ceo, 2026-11-04): A, parked until January 2027.** Proposal (nearby, 2026-11-04):
+  1.1.2 is still the newest release (1 Nov 2026), and it is the one with the Android below SDK 30 resolve-crash fix.
+  1.0.4 is the last build made with Kotlin 2.1; 1.0.5 and later are built with Kotlin 2.3. Two local probes on
+  `week3/ios-targets` (`iosArm64` + `iosSimulatorArm64` added, nothing committed with a version change):
+  - **A. Kotlin 2.3.20, dns-sd-kt 1.1.2:** `:nearby:compileKotlinIosArm64` and `compileKotlinIosSimulatorArm64`
+    pass. With our Kotlin 2.2.20 they fail: "The current Kotlin compiler can consume libraries having ABI version
+    <= '2.2.0'".
+  - **B. Kotlin 2.2.20, dns-sd-kt 1.0.4:** iOS, Android and JVM all compile.
+  - **Recommended: A**, with uno and satti moving to Kotlin 2.3.20 at the same time (ceo already leans this way).
+    What changes for Android with A: the library is built with Kotlin 2.3.20, so the games need Kotlin 2.3.x as well
+    (their iOS builds cannot read our klib otherwise; whether a 2.2.20 Android build reads our 2.3 metadata is
+    UNVERIFIED and does not matter once they move). kotlin-stdlib 2.3.20 then comes in openly, so the stdlib exclusion
+    on dns-sd-kt goes. Games still on AGP 8.9 print the non-fatal Lint metadata line until they take AGP 8.11 (#21).
+    Discovery code and behaviour stay the same.
+  - **Why not B:** Android would lose the fixes in 1.0.5 to 1.1.2: the resolve crash below SDK 30 (our minSdk is
+    24, so Android 7 to 10 phones), the 1.1.1 crash on a failed DNS query, and the newer resolve path. iOS would
+    browse with the old NSNetServiceBrowser instead of NWBrowser (1.1.0).
+  - Also for iOS, either way: the crypto provider is `cryptography-provider-cryptokit` 0.5.0 (CryptoKit: ECDH P-256,
+    HKDF, AES-GCM, SHA-256). The CommonCrypto ("apple") provider has no ECDH and no AES-GCM. New dependency, iOS only.
+  - **Decision (ceo, 2026-11-04):** A, and `cryptography-provider-cryptokit` 0.5.0 approved for `iosMain`. Not now:
+    iOS comes after Android production (Crazy Eights January to February 2027, Satti March), and moving uno and satti to
+    Kotlin 2.3 before the 31 December Play deadline is risk with no gain. Branch `week3/ios-targets` (PR #24) holds
+    Kotlin 2.3.20, the iOS targets and the iOS code; it stays a draft and does not merge or tag until ceo says so. main
+    and the v0.3.x line stay on Kotlin 2.2.20, and no game changes Kotlin now.
 - Side effects of dns-sd-kt 1.1.2 inside a game: kotlin-stdlib goes up to 2.3.20, and appcompat 1.7.1 and
   androidx.startup 1.2.0 are added at runtime. The uno session checks these inside its app when it adds 0.1.0.
 - Seat drop past the reconnect window mid-game: a host bot takes the seat; in the lobby the seat is freed (owner
@@ -119,8 +143,8 @@ crypto, use a maintained library.
 
 **Library:** `dev.whyoleg.cryptography` (cryptography-kotlin) **0.5.0**, Apache-2.0, repo active (last push 31 Oct
 2026). Primitives: ECDH on P-256, HKDF-SHA256, AES-256-GCM, SHA-256, all from the platform's own crypto through the
-JDK provider (Android: Conscrypt/BoringSSL; JVM: SunEC/SunJCE). No BouncyCastle. iOS (week 3) uses the library's Apple
-or OpenSSL provider. Release APK (R8) grows by **17.9 KB** (sample-host: 1,462,066 to 1,479,957 bytes).
+JDK provider (Android: Conscrypt/BoringSSL; JVM: SunEC/SunJCE). No BouncyCastle. iOS (week 3) uses the library's
+CryptoKit provider (proposal above; the Apple CommonCrypto provider lacks ECDH and AES-GCM). Release APK (R8) grows by **17.9 KB** (sample-host: 1,462,066 to 1,479,957 bytes).
 
 **Why not X25519** (ceo first named it; ceo OK'd P-256 on 2026-11-03): X25519 is only in cryptography-kotlin 0.6.0,
 which is built with Kotlin 2.3.20 (its iOS klib will not load with our 2.2.20, like dns-sd-kt), and Android's own
@@ -210,7 +234,7 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 | Week 1 (3 Nov) | nearby | End-to-end encryption (owner moved it to now): P-256 ECDH + HKDF + AES-GCM, fingerprint in the code, check code for list joins; tag `0.2.0` (wire-incompatible with 0.1.0). Release blocker: no store release with nearby play without it |
 | Week 2 | nearby | Bot pacing + turn timer (owner, 3 Nov), tag `0.3.0` (wire-compatible with 0.2.0) |
 | Week 2 | nearby | Battery/heat check, Wi-Fi low-latency lock for slow moves, second real phone (test 4c) |
-| Week 3 | nearby + games | iOS (Bonjour, Local network permission), Data safety, closed-test release |
+| Week 3 | nearby + games | Data safety, closed-test release. iOS (Bonjour, Local network permission) is parked to January 2027, after Android production (ceo, 2026-11-04) |
 
 ## How we test
 
@@ -319,6 +343,13 @@ bot seat: host seat 0, bot seat 1, Lava seat 2.
 - TV host leaves mid-match: `leave()` 66 ms on the TV; the Lava ended HostLeft: PASS.
 - No crash lines on either device. Home on both; uninstalled from the Lava (the TV copy was removed at about 07:07,
   owner rule: uninstall from the TV after each test); Lava Wi-Fi on; lock freed.
+
+**Open device checks (no slot yet, UNVERIFIED):**
+- Re-host with the same room name while a joiner keeps discovering: dns-sd-kt 1.1.2 on Android 14 and later keeps one
+  `ServiceInfoCallback` per service name and never removes it when the service is lost, so the room may not show again
+  until discovery restarts (seen in its code, PR #23).
+- First launch after a fresh install: phone discovery 5 times, reading the log every 5 s (the 2026-11-04 first-try miss
+  stays UNEXPLAINED).
 
 ## Rules for this repo
 

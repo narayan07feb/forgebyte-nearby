@@ -1,14 +1,15 @@
 [versions]
-# Pinned to games/uno and games/satti so the library and both games upgrade together.
-kotlin = "2.2.20"
+# iOS branch only (ceo, 2026-11-04): Kotlin 2.3.20 so dns-sd-kt 1.1.2's iOS klib loads. main and the v0.3.x line stay
+# on 2.2.20 with uno and satti; this lands after Android production, with both games moving to 2.3.x together.
+kotlin = "2.3.20"
 # AGP 8.11+ (lint 31.11) reads dns-sd-kt's Kotlin 2.3 metadata; 8.9.3 lint could not. Needs Gradle 8.13. uno and
 # satti stay on 8.9.3 until they bump; the AAR asks for no minimum AGP, so they still resolve it.
 agp = "8.11.2"
 coroutines = "1.10.1"
 serialization = "1.8.0"
 ktor = "3.1.0"
-# Discovery (owner pick 2026-11-03): Android NSD, iOS Bonjour, JVM JmDNS. Built with Kotlin 2.3.20: fine on
-# Android with our 2.2.20, but its iOS klib needs a 2.3 compiler (1.0.4 is the last 2.1 build). Decide by week 3.
+# Discovery (owner pick 2026-11-03): Android NSD, iOS Bonjour, JVM JmDNS. Built with Kotlin 2.3.20, so its iOS klib
+# needs a 2.3 compiler (decision A in docs/PLAN.md; 1.0.4 would drop the Android below-SDK-30 resolve fix).
 dnssd = "1.1.2"
 # End-to-end encryption (owner, 2026-11-03). 0.5.0 is built with Kotlin 2.2.0 (0.6.0 needs 2.3 for the iOS klib).
 cryptography = "0.5.0"
@@ -28,6 +29,8 @@ ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.re
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 cryptography-core = { module = "dev.whyoleg.cryptography:cryptography-core", version.ref = "cryptography" }
 cryptography-provider-jdk = { module = "dev.whyoleg.cryptography:cryptography-provider-jdk", version.ref = "cryptography" }
+# iOS: CryptoKit (ECDH P-256, HKDF, AES-GCM, SHA-256); the CommonCrypto "apple" provider has no ECDH or AES-GCM.
+cryptography-provider-cryptokit = { module = "dev.whyoleg.cryptography:cryptography-provider-cryptokit", version.ref = "cryptography" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 androidx-startup = { module = "androidx.startup:startup-runtime", version.ref = "androidx-startup" }
 androidx-core = { module = "androidx.core:core", version.ref = "androidx-core" }
