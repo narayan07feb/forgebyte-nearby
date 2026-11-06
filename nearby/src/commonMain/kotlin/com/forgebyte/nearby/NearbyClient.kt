@@ -108,7 +108,10 @@ public class NearbyClient<M, V>(
     private val _rejections = MutableSharedFlow<String>(extraBufferCapacity = 8)
     public val rejections: SharedFlow<String> = _rejections.asSharedFlow()
 
-    /** Joins with the room code from the QR or typed code: no host approval needed. */
+    /**
+     * Joins with the full room code from the QR or typed code. The host does not approve this join and no check code
+     * is shown: whoever has the full code gets a seat until the game starts (see [JoinCode]).
+     */
     public fun join(code: JoinCode, name: String): Job = connect(code.host, code.port, code.secret, code.fingerprint, name)
 
     /** Asks a room found nearby to let us in; [status] is [ClientStatus.WaitingForHost] until the host answers. */

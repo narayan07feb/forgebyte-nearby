@@ -4,9 +4,18 @@ package com.forgebyte.nearby
 public const val HOST_CONN: String = "host"
 
 public class RoomConfig(
+    /**
+     * The room's label in the discovery advert. It goes unencrypted to every device on the local network: never put
+     * a player name here; use a neutral label such as the game name and a short random word.
+     */
     public val roomName: String,
     public val hostName: String,
     public val gameVersion: Int,
+    /**
+     * The secret in the full join code ([JoinCode], QR or typed). Anyone who has the full code gets a seat with no host
+     * approval and no check code, until the game starts or the room is full. Make it with a secure random source, and
+     * share the code only in person or by QR.
+     */
     public val roomSecret: String,
     public val maxSeats: Int,
     public val minSeats: Int = 2,
