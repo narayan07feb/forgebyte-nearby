@@ -4,6 +4,7 @@ import com.forgebyte.nearby.ClientStatus
 import com.forgebyte.nearby.JoinCode
 import com.forgebyte.nearby.NearbyClient
 import com.forgebyte.nearby.Phase
+import com.forgebyte.nearby.ShortCode
 import com.forgebyte.nearby.discoverRooms
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,11 +26,14 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /**
- * Joins a demo room (by [code], or the first room found nearby when null), plays every own turn after [thinkMs], and
- * reports through [say]. Shared by the Mac client and the Android sample, so both joiners behave the same.
+ * Joins a demo room (by [code], by a typed [short] code, or else the first room found nearby), plays every own turn
+ * after [thinkMs], and reports through [say]. Shared by the Mac client and the Android sample, so both joiners behave
+ * the same.
  * Returns true when the match reached the end.
  */
-public suspend fun playAsJoiner(code: JoinCode?, name: String, thinkMs: Long, say: (String) -> Unit): Boolean {
+public suspend fun playAsJoiner(
+    code: JoinCode?, name: String, thinkMs: Long, short: ShortCode? = null, say: (String) -> Unit,
+): Boolean {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val client = NearbyClient(DemoGame.ID, DemoGame.VERSION, DemoMove.serializer(), DemoView.serializer(), scope)
     val start = TimeSource.Monotonic.markNow()
@@ -37,6 +41,9 @@ public suspend fun playAsJoiner(code: JoinCode?, name: String, thinkMs: Long, sa
         if (code != null) {
             say("joining with code $code")
             client.join(code, name)
+        } else if (short != null) {
+            say("asking to join with short code $short")
+            client.requestJoin(short, name)
         } else {
             say("looking for rooms on the local network")
             val room = withTimeoutOrNull(30.seconds) {
