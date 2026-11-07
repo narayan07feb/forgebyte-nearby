@@ -15,11 +15,12 @@ android {
         versionCode = 1
         versionName = "0.1"
     }
-    // Release build only to measure the app size the library adds (R8 on, debug key); never uploaded.
+    // Release build only to measure the app size the library adds (R8 on, debug key); never uploaded. No rules of
+    // its own: it builds only on nearby's consumer rules, the same as a game would (check for ceo, 2026-11-07).
     buildTypes {
         release {
             isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.getByName("debug")
         }
     }

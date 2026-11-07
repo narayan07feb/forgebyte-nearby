@@ -44,16 +44,9 @@ next to Accept/Decline on the host.
    "Call NearbyAndroid.init(context) before nearby discovery on Android."
 3. **Manifest.** The library merges two install-time permissions, `INTERNET` and `CHANGE_WIFI_MULTICAST_STATE` (no
    prompt, no "Nearby devices" permission). It also removes dns-sd-kt's startup initializer. Do not add it back.
-4. **R8 (release builds).** The library ships no consumer rules yet. Add these lines to the game's
-   `proguard-rules.pro` (the sample's minified release build uses them):
-
-   ```
-   -dontwarn java.lang.management.**
-   -dontwarn org.slf4j.impl.**
-   -dontwarn javax.naming.**
-   -dontwarn io.netty.**
-   -dontwarn reactor.blockhound.**
-   ```
+4. **R8 (release builds).** Nothing to add. The library ships its own R8 rules (`nearby/consumer-rules.pro`, from
+   the next tag after v0.3.5), and the sample's minified release build has no rules of its own. On v0.3.5 or older,
+   add `-dontwarn java.lang.management.**` to the game's `proguard-rules.pro`.
 5. **Room name.** `RoomConfig.roomName` goes unencrypted to the local network, so never put a player name in it.
    The library cuts a player name to 20 characters and a room name to 40. Until PR #30 is in a tag, that cut can split
    an emoji in two, so keep the game's own limit at or below these.
