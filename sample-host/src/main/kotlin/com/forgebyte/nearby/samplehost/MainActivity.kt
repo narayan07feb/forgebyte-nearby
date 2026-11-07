@@ -11,6 +11,7 @@ import com.forgebyte.nearby.JoinCode
 import com.forgebyte.nearby.NearbyAndroid
 import com.forgebyte.nearby.NearbyHost
 import com.forgebyte.nearby.RoomConfig
+import com.forgebyte.nearby.ShortCode
 import com.forgebyte.nearby.demo.DemoGame
 import com.forgebyte.nearby.discoverRooms
 import com.forgebyte.nearby.demo.DemoMove
@@ -36,14 +37,18 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(log) })
 
         NearbyAndroid.init(this) // nearby play opens here; nothing ran at app start
-        // `--es join <code>` or `--ez find true`: play as a joiner (by code, or the first room found nearby) instead of
-        // hosting; `--ei think <ms>` waits before each own move (default 700).
+        // `--es join <code>`, `--es short <XXX-XXX>` or `--ez find true`: play as a joiner (by the full code, by the short
+        // code the host shows, or the first room found nearby) instead of hosting; `--ei think <ms>` waits before each own
+        // move (default 700).
         val joinCode = intent.getStringExtra("join")
-        if (joinCode != null || intent.getBooleanExtra("find", false)) {
+        val shortText = intent.getStringExtra("short")
+        if (joinCode != null || shortText != null || intent.getBooleanExtra("find", false)) {
             val parsed = joinCode?.let(JoinCode::parse)
+            val short = shortText?.let(ShortCode::parse)
             scope.launch {
                 if (joinCode != null && parsed == null) return@launch say("FAIL bad join code $joinCode")
-                val ok = playAsJoiner(parsed, Build.MODEL, intent.getIntExtra("think", 700).toLong(), ::say)
+                if (shortText != null && short == null) return@launch say("FAIL bad short code $shortText")
+                val ok = playAsJoiner(parsed, Build.MODEL, intent.getIntExtra("think", 700).toLong(), short, ::say)
                 say("joiner ${if (ok) "PASS" else "FAIL"}")
             }
             return
@@ -58,7 +63,7 @@ class MainActivity : Activity() {
         host = room
         scope.launch {
             val port = room.open()
-            say("listening on port $port, join codes ${room.joinCodes(port)}")
+            say("listening on port $port, join codes ${room.joinCodes(port)}, short codes ${room.shortCodes(port)}")
             launch { room.advertise(port) }
             // `--ez bot true`: one bot seat, so a match tests bot pacing (botDelayMs); it starts once a joiner is in too.
             val bots = if (intent.getBooleanExtra("bot", false)) 1 else 0
