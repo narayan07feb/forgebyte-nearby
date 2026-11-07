@@ -146,6 +146,9 @@ screen open shows no new janky frames compared with the build before the change.
    join it again.
 8. **iOS (week 3, not built yet).** The plan is `NSLocalNetworkUsageDescription` and `NSBonjourServices` with
    `_forgebyte._tcp` in `Info.plist`.
+9. **Debug log (optional, debug builds only).** `NearbyTrace.sink = { Log.d("NearbyTrace", it) }` shows the
+   library's connect, key exchange, drop and retry lines, so a join that hangs on a phone can be read from logcat. The
+   lines hold no keys, codes, names, moves or views. Leave it null in release builds.
 
 **Play Data safety and Families: guidance only, check with the owner before filing.** These are facts about the
 library, not answers for the form:
