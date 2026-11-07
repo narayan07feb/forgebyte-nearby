@@ -67,6 +67,8 @@ public class NearbyClient<M, V>(
      * (seen on the Lava, 2026-11-03: "Host is down" until the phone sent traffic).
      */
     private val firstConnectFor: Duration = 10.seconds,
+    /** Where the seat is kept for [resume] after the app is killed; see [SeatStore]. Default: memory only. */
+    private val seatStore: SeatStore = InMemorySeatStore(),
 ) {
     private val http = HttpClient(CIO) {
         // One slow attempt must not use up the whole first-connect time: each try gets its own limit.
@@ -129,6 +131,17 @@ public class NearbyClient<M, V>(
         return connect(host, code.port, secret = null, fingerprint = null, name)
     }
 
+    /**
+     * Takes back the seat this app had before it was killed ([SeatStore.load]). The room's key must match
+     * [SavedSeat.fingerprint] before the token is sent, so another host now on the same address never gets it
+     * ([EndReason.HostKeyMismatch]). The host gives the seat back, also after a bot took it over, unless the player
+     * left or was kicked; it then refuses, and the saved seat is cleared.
+     */
+    public fun resume(seat: SavedSeat): Job {
+        require(seat.gameId == gameId) { "the saved seat is for ${seat.gameId}, not $gameId" }
+        return connect(seat.host, seat.port, secret = null, fingerprint = seat.fingerprint, seat.name, resumeToken = seat.token)
+    }
+
     /** This device's site-local IPv4 addresses; tests point it at loopback. */
     internal var myAddresses: () -> List<String> = ::localAddresses
 
@@ -136,11 +149,13 @@ public class NearbyClient<M, V>(
      * Connects and keeps the seat: after a drop it reconnects with the seat's token every second, until the host
      * answers or [RETRY_FOR] passes. The host decides whether the seat is still there.
      */
-    private fun connect(host: String, port: Int, secret: String?, fingerprint: String?, name: String): Job = scope.launch {
+    private fun connect(
+        host: String, port: Int, secret: String?, fingerprint: String?, name: String, resumeToken: String? = null,
+    ): Job = scope.launch {
         val started = TimeSource.Monotonic.markNow()
         val joinId = secureRandomBytes(16).toHex() // one per join, kept across retries until the Welcome
         var pinned = fingerprint // after the first join, every reconnect must reach the same room key
-        var token: String? = null
+        var token: String? = resumeToken
         var droppedAt: TimeSource.Monotonic.ValueTimeMark? = null
         while (true) {
             var end: EndReason? = null
@@ -186,6 +201,7 @@ public class NearbyClient<M, V>(
                             trace("joiner: welcome, seat ${msg.lobby.yourSeat}")
                             token = msg.reconnectToken
                             droppedAt = null
+                            seatStore.save(SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken))
                         }
                         end = handle(msg)
                         if (end != null) break
@@ -209,6 +225,7 @@ public class NearbyClient<M, V>(
             }
             end?.let {
                 trace("joiner: ended $it")
+                if (token != null) seatStore.clear() // this seat is gone for good; a join that never got one keeps the store
                 _status.value = ClientStatus.Ended(it)
                 http.close()
                 return@launch

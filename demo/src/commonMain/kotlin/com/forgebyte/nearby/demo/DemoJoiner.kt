@@ -1,9 +1,11 @@
 package com.forgebyte.nearby.demo
 
 import com.forgebyte.nearby.ClientStatus
+import com.forgebyte.nearby.InMemorySeatStore
 import com.forgebyte.nearby.JoinCode
 import com.forgebyte.nearby.NearbyClient
 import com.forgebyte.nearby.Phase
+import com.forgebyte.nearby.SeatStore
 import com.forgebyte.nearby.ShortCode
 import com.forgebyte.nearby.discoverRooms
 import kotlinx.coroutines.CoroutineScope
@@ -26,7 +28,8 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /**
- * Joins a demo room (by [code], by a typed [short] code, or else the first room found nearby), plays every own turn
+ * Joins a demo room (by [code], by a typed [short] code, back into the seat [seatStore] kept when [resume] is set, or
+ * else the first room found nearby), plays every own turn
  * after [thinkMs], and reports through [say]. [onClient] gets the client before it connects (the Android sample uses it
  * to leave on command and to draw its status line). Shared by the Mac client and the Android sample, so both joiners
  * behave the same.
@@ -34,14 +37,19 @@ import kotlin.time.TimeSource
  */
 public suspend fun playAsJoiner(
     code: JoinCode?, name: String, thinkMs: Long, short: ShortCode? = null,
+    seatStore: SeatStore = InMemorySeatStore(), resume: Boolean = false,
     onClient: (NearbyClient<DemoMove, DemoView>) -> Unit = {}, say: (String) -> Unit,
 ): Boolean {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val client = NearbyClient(DemoGame.ID, DemoGame.VERSION, DemoMove.serializer(), DemoView.serializer(), scope)
+    val client = NearbyClient(DemoGame.ID, DemoGame.VERSION, DemoMove.serializer(), DemoView.serializer(), scope, seatStore = seatStore)
     onClient(client)
     val start = TimeSource.Monotonic.markNow()
     try {
-        if (code != null) {
+        if (resume) {
+            val saved = seatStore.load() ?: return false.also { say("FAIL no saved seat to resume") }
+            say("resuming seat in ${saved.host}:${saved.port} as ${saved.name}")
+            client.resume(saved)
+        } else if (code != null) {
             say("joining with code $code")
             client.join(code, name)
         } else if (short != null) {
