@@ -13,6 +13,7 @@ import com.forgebyte.nearby.Lobby
 import com.forgebyte.nearby.NearbyClient
 import com.forgebyte.nearby.NearbyAndroid
 import com.forgebyte.nearby.NearbyHost
+import com.forgebyte.nearby.NearbyTrace
 import com.forgebyte.nearby.RoomConfig
 import com.forgebyte.nearby.SavedSeat
 import com.forgebyte.nearby.SeatStore
@@ -43,6 +44,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The library's connect and drop lines, for device runs (adb logcat -s NearbyTrace:I); this app is test-only.
+        NearbyTrace.sink = { Log.i("NearbyTrace", it) }
         // A big status line on top (room, code, seats, phase, hand) so a screenshot pair shows the same room on both phones.
         header = TextView(this).apply { setPadding(32, 32, 32, 16); textSize = 20f; setTypeface(typeface, android.graphics.Typeface.BOLD) }
         log = TextView(this).apply { setPadding(32, 16, 32, 32) }
