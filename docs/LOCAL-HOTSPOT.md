@@ -1,7 +1,9 @@
 # In-app hotspot ("Make a network"): design note
 
-Status: design only (owner asked 7 Nov 13:1x; code after the owner's OK). Lines marked **UNVERIFIED** are what the
-Android docs or AOSP say, not yet seen on our phones. The test plan below checks each one.
+Status: plan OK (owner via ceo, 7 Nov). Code: the opt-in, Android-only artifact
+`com.github.narayan07feb.forgebyte-nearby:nearby-hotspot` (`NearbyHotspot.start` / `join`, `HotspotNetwork`); no game
+uses it yet. Lines marked **UNVERIFIED** are what the Android docs or AOSP say, not yet seen on our phones. The test
+plan below checks each one.
 
 ## Why
 
@@ -19,7 +21,8 @@ Settings by hand. "Make a network" does it inside the game, so the table needs n
 4. **Joiner** scans the QR in the game (or types the network name and password), and the app joins that network (see
    "Join paths").
 5. On that network, the normal join runs: the room shows up in the nearby list (mDNS), or the player types the short
-   code. The host is also the network's gateway, so the joiner tries the gateway address first for a short code.
+   code. The short code holds the last byte of the host's hotspot address, and the joiner gets an address on the
+   same /24 network, so it finds the host with no scan.
 6. When the room ends (or the host leaves nearby play), the host closes the reservation and the hotspot stops. The
    joiner releases its network request, and Android goes back to the saved Wi-Fi.
 
@@ -27,8 +30,8 @@ Settings by hand. "Make a network" does it inside the game, so the table needs n
 
 | Android | Host ("Make a network") | Joiner |
 |---|---|---|
-| 7 (API 24, our minSdk) | Not offered (LOHS starts at API 26) | `addNetwork` + `enableNetwork`, or type it in Settings |
-| 8, 9 (API 26 to 28) | LOHS; SSID and password from `getWifiConfiguration()` | `addNetwork` + `enableNetwork` (still allowed on these versions) |
+| 7 (API 24, our minSdk) | Not offered (LOHS starts at API 26) | Type the name and password in Settings (`canJoinInApp` is false) |
+| 8, 9 (API 26 to 28) | LOHS; SSID and password from `getWifiConfiguration()` | Type them in Settings. `addNetwork` would work here, but we have no phone to test it, so it is left out |
 | 10 (API 29) | LOHS, as above | `WifiNetworkSpecifier` (`ConnectivityManager.requestNetwork`) |
 | 11, 12 (API 30 to 32) | LOHS; `getSoftApConfiguration()` | `WifiNetworkSpecifier` |
 | 13+ (API 33+) | LOHS; `getSoftApConfiguration().wifiSsid` | `WifiNetworkSpecifier` |
@@ -42,11 +45,11 @@ Settings by hand. "Make a network" does it inside the game, so the table needs n
 - Joining with a phone camera (outside our app) makes the hotspot a normal saved Wi-Fi with "no internet". It works for
   play if the phone stays on it. Android may switch back to mobile data or show "No internet" (**UNVERIFIED**).
 - mDNS on these networks is the biggest unknown. NSD may not find the room on a specifier network, and the host may
-  not advertise on the hotspot interface (**UNVERIFIED**, both). The short code (gateway first) is the path that does
-  not need mDNS.
+  not advertise on the hotspot interface (**UNVERIFIED**, both). The short code is the path that does not need mDNS.
 - The host's short code must come from the hotspot interface address (`ap0`, `swlan0` or `wlan1`), not from mobile
-  data. Today `wifiFirst()` puts `wlan*` first, and on a phone where the hotspot is `wlan1` it can pick the home Wi-Fi
-  address first (assumption A12). The code change picks the LOHS interface address by name.
+  data. Core `wifiFirst()` puts `wlan*` first, and on a phone where the hotspot is `wlan1` it can pick the home Wi-Fi
+  address first (assumption A12). So `Hotspot.shortCode(port)` does not use it: it takes the address that appeared
+  after the start, on a hotspot-named interface first (`ap*`, `swlan*`, `softap*`, `wlan1+`).
 
 ## Permissions
 
