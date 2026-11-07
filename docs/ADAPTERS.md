@@ -1,8 +1,8 @@
 # Writing a game adapter (NearbyGame)
 
-For the uno and satti sessions. Library: `com.github.narayan07feb.forgebyte-nearby:nearby:v0.2.0` (ship only on
-v0.2.0 or later). The host phone is the referee: it keeps the full state, applies every move and sends each seat only
-`viewFor(state, seat)`.
+For the uno and satti sessions. Library: `com.github.narayan07feb.forgebyte-nearby:nearby` (ship only on v0.2.0 or
+later; setup below). The host phone is the referee: it keeps the full state, applies every move and sends each seat
+only `viewFor(state, seat)`.
 
 ## Rules every adapter must follow
 
@@ -33,6 +33,44 @@ v0.2.0 or later). The host phone is the referee: it keeps the full state, applie
 
 For a request (nearby or short code), show `checkCode` on the joiner while it waits, and the request's `checkCode`
 next to Accept/Decline on the host.
+
+## Adding nearby play to a game (setup and store checklist)
+
+1. **Dependency.** Add JitPack to `settings.gradle.kts` (`maven("https://jitpack.io")`) and
+   `com.github.narayan07feb.forgebyte-nearby:nearby:<tag>` to the shared module. Use the newest tag in the GitHub
+   releases (v0.3.5 on 7 Nov). It does not lift the game's kotlin-stdlib above 2.2.20.
+2. **Start nothing at app start.** Call `NearbyAndroid.init(context)` when the player opens nearby play, before
+   `discoverRooms` or `advertise`. It is safe to call more than once. Without it, discovery fails with
+   "Call NearbyAndroid.init(context) before nearby discovery on Android."
+3. **Manifest.** The library merges two install-time permissions, `INTERNET` and `CHANGE_WIFI_MULTICAST_STATE` (no
+   prompt, no "Nearby devices" permission). It also removes dns-sd-kt's startup initializer. Do not add it back.
+4. **R8 (release builds).** The library ships no consumer rules yet. Add these lines to the game's
+   `proguard-rules.pro` (the sample's minified release build uses them):
+
+   ```
+   -dontwarn java.lang.management.**
+   -dontwarn org.slf4j.impl.**
+   -dontwarn javax.naming.**
+   -dontwarn io.netty.**
+   -dontwarn reactor.blockhound.**
+   ```
+5. **Room name.** `RoomConfig.roomName` goes unencrypted to the local network, so never put a player name in it.
+   The library cuts a player name to 20 characters and a room name to 40. Until PR #30 is in a tag, that cut can split
+   an emoji in two, so keep the game's own limit at or below these.
+6. **Your own room.** Discovery also lists the room this phone is hosting. Do not offer Join while the phone hosts.
+7. **Play again.** There is no rematch in the library. After `Phase.OVER`, the host opens a new room and the players
+   join it again.
+8. **iOS (week 3, not built yet).** The plan is `NSLocalNetworkUsageDescription` and `NSBonjourServices` with
+   `_forgebyte._tcp` in `Info.plist`.
+
+**Play Data safety and Families: guidance only, check with the owner before filing.** These are facts about the
+library, not answers for the form:
+
+- Nothing leaves the local network. The library sends nothing to a server, keeps no account and no analytics.
+- Players see each other's display names. Names, moves and views are encrypted end to end between the phones. The
+  discovery advert goes in clear text to the local network: game id, game and protocol version, room name and free
+  seats.
+- Satti (Families): no data goes to other players beyond the display name typed in the room (and the moves).
 
 ## Satti: fit check (read-only, 2026-11-03, satti main)
 
