@@ -70,11 +70,14 @@ internal fun roomTxt(gameId: String, config: RoomConfig, freeSeats: Int): Map<St
     Txt.GAME to gameId,
     Txt.PROTOCOL to PROTOCOL_VERSION.toString(),
     Txt.GAME_VERSION to config.gameVersion.toString(),
-    Txt.NAME to config.roomName.take(MAX_ROOM_NAME),
+    Txt.NAME to config.roomName.cutText(MAX_ROOM_NAME),
     Txt.FREE to freeSeats.toString(),
 )
 
 internal const val MAX_ROOM_NAME = 40
+
+/** The mDNS service name: one DNS label, so at most 63 bytes in UTF-8 (RFC 6763 4.1.1); a Hindi room name is longer. */
+internal fun serviceName(config: RoomConfig): String = config.roomName.cutText(MAX_ROOM_NAME, maxUtf8Bytes = 63)
 
 /** Rooms of [gameId] on the local network, updated as they appear, change and go away. */
 public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {

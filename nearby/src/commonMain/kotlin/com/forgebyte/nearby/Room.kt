@@ -489,7 +489,7 @@ public class Room<S, M, V>(
         const val TOO_LATE = "Too late, another player already did that."
 
         fun cleanName(raw: String, seat: Int) =
-            raw.filter { !it.isISOControl() }.trim().take(MAX_NAME).ifBlank { "Player ${seat + 1}" }
+            raw.filter { !it.isISOControl() }.trim().cutText(MAX_NAME).ifBlank { "Player ${seat + 1}" }
 
         /** Compares in time that does not depend on where the strings differ. */
         fun sameSecret(a: String, b: String): Boolean {
