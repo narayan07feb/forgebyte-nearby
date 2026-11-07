@@ -1,7 +1,9 @@
 # In-app hotspot ("Make a network"): design note
 
-Status: design only (owner asked 7 Nov 13:1x; code after the owner's OK). Lines marked **UNVERIFIED** are what the
-Android docs or AOSP say, not yet seen on our phones. The test plan below checks each one.
+Status: **parked by the owner, 7 Nov** ("a phone hotspot is the same as any shared network"). Nearby play already
+works when a player turns on a hotspot in Settings, so games show that as help text (`ADAPTERS.md`, "No Wi-Fi?").
+The code stays in draft PR #36, not merged. No more work on it. Lines marked **UNVERIFIED** are what the Android
+docs or AOSP say, never seen on our phones.
 
 ## Why
 

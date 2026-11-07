@@ -34,6 +34,14 @@ only `viewFor(state, seat)`.
 For a request (nearby or short code), show `checkCode` on the joiner while it waits, and the request's `checkCode`
 next to Accept/Decline on the host.
 
+**No Wi-Fi.** A phone hotspot is a shared network like any other, so every join way above works on it. The library
+does not start a hotspot (the in-app hotspot is parked, owner 7 Nov). Put this help text on the nearby screen, next
+to the empty room list:
+
+> No Wi-Fi? Turn on a phone hotspot in Settings, then the others join it.
+
+The phone with the hotspot can host or join. A match on a hotspot is an owner test (it needs a settings change).
+
 ## Adding nearby play to a game (setup and store checklist)
 
 1. **Dependency.** Add JitPack to `settings.gradle.kts` (`maven("https://jitpack.io")`) and
