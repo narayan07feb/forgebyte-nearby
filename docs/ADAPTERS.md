@@ -46,18 +46,18 @@ The phone with the hotspot can host or join. A match on a hotspot is an owner te
 
 1. **Dependency.** Add JitPack to `settings.gradle.kts` (`maven("https://jitpack.io")`) and
    `com.github.narayan07feb.forgebyte-nearby:nearby:<tag>` to the shared module. Use the newest tag in the GitHub
-   releases (v0.3.5 on 7 Nov). It does not lift the game's kotlin-stdlib above 2.2.20.
+   releases (v0.3.6 on 7 Nov). It does not lift the game's kotlin-stdlib above 2.2.20.
 2. **Start nothing at app start.** Call `NearbyAndroid.init(context)` when the player opens nearby play, before
    `discoverRooms` or `advertise`. It is safe to call more than once. Without it, discovery fails with
    "Call NearbyAndroid.init(context) before nearby discovery on Android."
 3. **Manifest.** The library merges two install-time permissions, `INTERNET` and `CHANGE_WIFI_MULTICAST_STATE` (no
    prompt, no "Nearby devices" permission). It also removes dns-sd-kt's startup initializer. Do not add it back.
 4. **R8 (release builds).** Nothing to add. The library ships its own R8 rules (`nearby/consumer-rules.pro`, from
-   the next tag after v0.3.5), and the sample's minified release build has no rules of its own. On v0.3.5 or older,
+   v0.3.6), and the sample's minified release build has no rules of its own. On v0.3.5 or older,
    add `-dontwarn java.lang.management.**` to the game's `proguard-rules.pro`.
 5. **Room name.** `RoomConfig.roomName` goes unencrypted to the local network, so never put a player name in it.
-   The library cuts a player name to 20 characters and a room name to 40. Until PR #30 is in a tag, that cut can split
-   an emoji in two, so keep the game's own limit at or below these.
+   The library cuts a player name to 20 characters and a room name to 40, on whole characters (v0.3.6), so keep the
+   game's own limit at or below these.
 6. **Your own room.** Discovery also lists the room this phone is hosting. Do not offer Join while the phone hosts.
 7. **Play again.** There is no rematch in the library. After `Phase.OVER`, the host opens a new room and the players
    join it again.
