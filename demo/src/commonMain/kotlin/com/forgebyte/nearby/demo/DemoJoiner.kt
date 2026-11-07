@@ -27,15 +27,18 @@ import kotlin.time.TimeSource
 
 /**
  * Joins a demo room (by [code], by a typed [short] code, or else the first room found nearby), plays every own turn
- * after [thinkMs], and reports through [say]. Shared by the Mac client and the Android sample, so both joiners behave
- * the same.
+ * after [thinkMs], and reports through [say]. [onClient] gets the client before it connects (the Android sample uses it
+ * to leave on command and to draw its status line). Shared by the Mac client and the Android sample, so both joiners
+ * behave the same.
  * Returns true when the match reached the end.
  */
 public suspend fun playAsJoiner(
-    code: JoinCode?, name: String, thinkMs: Long, short: ShortCode? = null, say: (String) -> Unit,
+    code: JoinCode?, name: String, thinkMs: Long, short: ShortCode? = null,
+    onClient: (NearbyClient<DemoMove, DemoView>) -> Unit = {}, say: (String) -> Unit,
 ): Boolean {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val client = NearbyClient(DemoGame.ID, DemoGame.VERSION, DemoMove.serializer(), DemoView.serializer(), scope)
+    onClient(client)
     val start = TimeSource.Monotonic.markNow()
     try {
         if (code != null) {
