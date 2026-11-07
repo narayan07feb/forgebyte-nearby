@@ -1,8 +1,8 @@
 # Writing a game adapter (NearbyGame)
 
-For the uno and satti sessions. Library: `com.github.narayan07feb.forgebyte-nearby:nearby:v0.2.0` (ship only on
-v0.2.0 or later). The host phone is the referee: it keeps the full state, applies every move and sends each seat only
-`viewFor(state, seat)`.
+For the uno and satti sessions. Library: `com.github.narayan07feb.forgebyte-nearby:nearby` (ship only on v0.2.0 or
+later; setup below). The host phone is the referee: it keeps the full state, applies every move and sends each seat
+only `viewFor(state, seat)`.
 
 ## Rules every adapter must follow
 
@@ -34,6 +34,14 @@ v0.2.0 or later). The host phone is the referee: it keeps the full state, applie
 For a request (nearby or short code), show `checkCode` on the joiner while it waits, and the request's `checkCode`
 next to Accept/Decline on the host.
 
+**No Wi-Fi.** A phone hotspot is a shared network like any other, so every join way above works on it. The library
+does not start a hotspot (the in-app hotspot is parked, owner 7 Nov). Put this help text on the nearby screen, next
+to the empty room list:
+
+> No Wi-Fi? Turn on a phone hotspot in Settings, then the others join it.
+
+The phone with the hotspot can host or join. A match on a hotspot is an owner test (it needs a settings change).
+
 ## Seat back after the app was killed (ceo, 2026-11-07)
 
 - Pass a `SeatStore` to `NearbyClient(..., seatStore = store)`. The client saves a `SavedSeat` on every welcome and
@@ -51,6 +59,102 @@ next to Accept/Decline on the host.
 
 There is no rematch in a room: after `Phase.OVER` the room is done. To play again, the host opens a new room and the
 players join it (ceo, 2026-11-07: games open a new room).
+
+## Motion for room screens (Compose recipe)
+
+The library has no UI. These are the three moves a nearby screen needs and the values to use (Compose foundation
+1.7 or newer for `animateItem`). Each one has a job: show that a room came or went, show what the join is waiting
+for, and show who sat down. Use only the Compose
+animation APIs below (no `delay` loops or timers for motion): they run on the frame clock and its
+`MotionDurationScale`, so the games' test builds (which set `MotionDurationScale(1f)`) and a scale of 0 behave the
+same as for every other animation in the game.
+
+```kotlin
+val EaseOutQuart = CubicBezierEasing(0.165f, 0.84f, 0.44f, 1f)    // things that come or go
+val EaseInOutCubic = CubicBezierEasing(0.645f, 0.045f, 0.355f, 1f) // things already on screen that move
+fun <T> enter(reduce: Boolean): FiniteAnimationSpec<T> = if (reduce) snap<T>() else tween(240, easing = EaseOutQuart)
+fun <T> exit(reduce: Boolean): FiniteAnimationSpec<T> = if (reduce) snap<T>() else tween(180, easing = EaseOutQuart)
+fun <T> move(reduce: Boolean): FiniteAnimationSpec<T> = if (reduce) snap<T>() else tween(240, easing = EaseInOutCubic)
+```
+
+`reduce` is the game's own reduce-motion setting (or the system "remove animations" read by the game). With it on,
+every change still happens, just without motion.
+
+1. **Room list: a room comes or goes.** `discoverRooms` sends the whole list each time. Key the rows by `RoomAd.key`
+   (one per advertised room), so a room whose free seats change keeps its row, and a new or gone room fades while the
+   others slide:
+
+   ```kotlin
+   LazyColumn {
+       items(rooms, key = { it.key }) { room ->
+           RoomRow(room, Modifier.animateItem(fadeInSpec = enter(reduce), placementSpec = move(reduce), fadeOutSpec = exit(reduce)))
+       }
+   }
+   ```
+
+   Do not key by index or by room name (two rooms can share a name). The empty list ("No Wi-Fi?" help text) fades in
+   with the same `enter` spec; do not animate the list when the player scrolls or moves focus with a TV remote.
+2. **Join status.** Show one line per `ClientStatus` (Connecting, WaitingForHost with the check code, Connected,
+   Reconnecting, Ended) and change it with a short crossfade plus a small rise (a sixth of the line height), never a
+   slide across the screen:
+
+   ```kotlin
+   AnimatedContent(status, transitionSpec = {
+       (fadeIn(enter(reduce)) + slideInVertically(enter(reduce)) { it / 6 }) togetherWith fadeOut(exit(reduce))
+   }) { s -> StatusLine(s) }
+   ```
+
+   Keep the check code still while it shows (no pulse on it): the players read it out loud to each other.
+3. **Seat fill.** Seats are positional (`Lobby.seats`, key by index). When a seat fills, empties or goes `connected =
+   false`, animate only its colour and alpha, 180 ms (`animateColorAsState(target, exit(reduce))`). A new player's
+   name can scale from 0.96 to 1 with `enter`; never from 0.
+
+**One rule from uno's frame trace: no infinite pulse that redraws the whole screen.** A waiting dot or a
+"Reconnecting" pulse is fine only in its own small layer: read the animated value inside `Modifier.graphicsLayer { }`
+(or `drawBehind { }`), not in the composable body, so each frame redraws that one layer and recomposes nothing:
+
+```kotlin
+@Composable fun WaitingDot(color: Color, reduce: Boolean) {
+    if (reduce) return Box(Modifier.size(8.dp).background(color, CircleShape)) // still dot, no transition running
+    val pulse by rememberInfiniteTransition().animateFloat(1f, 0.4f, infiniteRepeatable(tween(800), RepeatMode.Reverse))
+    Box(Modifier.size(8.dp).graphicsLayer { alpha = pulse }.background(color, CircleShape))
+}
+```
+
+Stop it (leave the composition) as soon as the status changes. Animate alpha and translation, not size or padding, so
+no frame re-measures the list. Check before a merge: `adb shell dumpsys gfxinfo <package>` on the Lava with the room
+screen open shows no new janky frames compared with the build before the change.
+
+## Adding nearby play to a game (setup and store checklist)
+
+1. **Dependency.** Add JitPack to `settings.gradle.kts` (`maven("https://jitpack.io")`) and
+   `com.github.narayan07feb.forgebyte-nearby:nearby:<tag>` to the shared module. Use the newest tag in the GitHub
+   releases (v0.3.6 on 7 Nov). It does not lift the game's kotlin-stdlib above 2.2.20.
+2. **Start nothing at app start.** Call `NearbyAndroid.init(context)` when the player opens nearby play, before
+   `discoverRooms` or `advertise`. It is safe to call more than once. Without it, discovery fails with
+   "Call NearbyAndroid.init(context) before nearby discovery on Android."
+3. **Manifest.** The library merges two install-time permissions, `INTERNET` and `CHANGE_WIFI_MULTICAST_STATE` (no
+   prompt, no "Nearby devices" permission). It also removes dns-sd-kt's startup initializer. Do not add it back.
+4. **R8 (release builds).** Nothing to add. The library ships its own R8 rules (`nearby/consumer-rules.pro`, from
+   v0.3.6), and the sample's minified release build has no rules of its own. On v0.3.5 or older,
+   add `-dontwarn java.lang.management.**` to the game's `proguard-rules.pro`.
+5. **Room name.** `RoomConfig.roomName` goes unencrypted to the local network, so never put a player name in it.
+   The library cuts a player name to 20 characters and a room name to 40, on whole characters (v0.3.6), so keep the
+   game's own limit at or below these.
+6. **Your own room.** Discovery also lists the room this phone is hosting. Do not offer Join while the phone hosts.
+7. **Play again.** There is no rematch in the library. After `Phase.OVER`, the host opens a new room and the players
+   join it again.
+8. **iOS (week 3, not built yet).** The plan is `NSLocalNetworkUsageDescription` and `NSBonjourServices` with
+   `_forgebyte._tcp` in `Info.plist`.
+
+**Play Data safety and Families: guidance only, check with the owner before filing.** These are facts about the
+library, not answers for the form:
+
+- Nothing leaves the local network. The library sends nothing to a server, keeps no account and no analytics.
+- Players see each other's display names. Names, moves and views are encrypted end to end between the phones. The
+  discovery advert goes in clear text to the local network: game id, game and protocol version, room name and free
+  seats.
+- Satti (Families): no data goes to other players beyond the display name typed in the room (and the moves).
 
 ## Satti: fit check (read-only, 2026-11-03, satti main)
 
