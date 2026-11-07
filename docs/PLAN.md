@@ -212,6 +212,12 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 | Week 2 | nearby | Battery/heat check, Wi-Fi low-latency lock for slow moves, second real phone (test 4c) |
 | Week 3 | nearby + games | iOS (Bonjour, Local network permission), Data safety, closed-test release |
 
+**Parked**
+
+- In-app hotspot ("Make a network", `docs/LOCAL-HOTSPOT.md`, draft PR #36): parked by the owner, 7 Nov. A phone
+  hotspot is the same as any shared network, and nearby play already works when a player turns on a hotspot in
+  Settings. No more work on it. Games show the help text instead (`docs/ADAPTERS.md`, "No Wi-Fi?").
+
 ## How we test
 
 1. **Unit tests (Mac, every commit, `studio/tools/ci-local.sh`)**: room state machine (join, full room, leave,
@@ -225,7 +231,8 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 4. **Real devices**:
    - Lava as host + Android emulator as joiner on the same Wi-Fi (emulator only with the owner's yes for that run).
    - Lava as host + Mac JVM test client joining over Wi-Fi (no second phone needed).
-   - Lava hotspot + a second real phone (owner's or borrowed: we have one test phone).
+   - A phone hotspot turned on in Settings + a second real phone joining it: an OWNER test (a settings change, so
+     the owner taps it; sessions do not run it).
    Each run: room shows up in the list, QR join works, full match to the end, Wi-Fi off/on mid-game (reconnect),
    host leaves, move round-trip time (target under 150 ms on Wi-Fi).
 5. **Before release**: usual Lava checks (no crash/ANR in the buffer, 20-minute session battery and temperature),
