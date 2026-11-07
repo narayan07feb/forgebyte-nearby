@@ -69,8 +69,8 @@ library, not answers for the form:
 
 - Nothing leaves the local network. The library sends nothing to a server, keeps no account and no analytics.
 - Players see each other's display names. Names, moves and views are encrypted end to end between the phones. The
-  discovery advert goes in clear text to the local network: game id, game and protocol version, room name and free
-  seats.
+  discovery advert goes in clear text to the local network: game id, game and protocol version, room name, free
+  seats and the host's local IPv4 addresses (the network already sees those).
 - Satti (Families): no data goes to other players beyond the display name typed in the room (and the moves).
 
 ## Satti: fit check (read-only, 2026-11-03, satti main)

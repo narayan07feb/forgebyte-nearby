@@ -136,7 +136,7 @@ public class NearbyHost<S, M, V>(
             .collectLatest { free ->
                 publishService(SERVICE_TYPE, config.roomName.take(MAX_ROOM_NAME)) {
                     this.port = port
-                    txt = roomTxt(game.gameId, config, free)
+                    txt = roomTxt(game.gameId, config, free, localAddresses())
                 }
             }
     }
