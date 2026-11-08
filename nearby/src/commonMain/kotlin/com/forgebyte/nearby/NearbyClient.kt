@@ -12,6 +12,7 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
@@ -142,6 +143,9 @@ public class NearbyClient<M, V>(
         return connect(seat.host, seat.port, secret = null, fingerprint = seat.fingerprint, seat.name, resumeToken = seat.token)
     }
 
+    /** How long a dropped seat keeps reconnecting before it ends [EndReason.Unreachable]; tests shorten it. */
+    internal var retryFor: Duration = RETRY_FOR
+
     /** This device's site-local IPv4 addresses; tests point it at loopback. */
     internal var myAddresses: () -> List<String> = ::localAddresses
 
@@ -156,12 +160,16 @@ public class NearbyClient<M, V>(
         val joinId = secureRandomBytes(16).toHex() // one per join, kept across retries until the Welcome
         var pinned = fingerprint // after the first join, every reconnect must reach the same room key
         var token: String? = resumeToken
-        var droppedAt: TimeSource.Monotonic.ValueTimeMark? = null
+        // A resume is a reconnect from the start: its retry time runs from now, so a dead host cannot hold it.
+        var droppedAt: TimeSource.Monotonic.ValueTimeMark? = if (resumeToken != null) started else null
         while (true) {
             var end: EndReason? = null
+            // The time this attempt may take to get through the key exchange; null while there is no limit yet.
+            val left = if (token == null) firstConnectFor - started.elapsedNow() else droppedAt?.let { retryFor - it.elapsedNow() }
+            var shook = false
             try {
                 trace("joiner: connecting to $host:$port")
-                http.webSocket(host = host, port = port, path = WS_PATH) {
+                bounded(left, done = { shook }) { http.webSocket(host = host, port = port, path = WS_PATH) {
                     trace("joiner: socket open")
                     val shake = withTimeoutOrNull(HANDSHAKE_FOR) {
                         joinerHandshake(
@@ -183,6 +191,7 @@ public class NearbyClient<M, V>(
                         }
                         Handshake.Failed -> return@webSocket // treated as a drop below
                     }
+                    shook = true
                     pinned = secure.hostFingerprint
                     _checkCode.value = secure.checkCode
                     link = Link(this, secure)
@@ -206,7 +215,7 @@ public class NearbyClient<M, V>(
                         end = handle(msg)
                         if (end != null) break
                     }
-                }
+                } }
             } catch (e: Exception) {
                 // Our own cancellation goes on up; a socket error or a cut session is a drop, handled below.
                 currentCoroutineContext().ensureActive()
@@ -219,7 +228,7 @@ public class NearbyClient<M, V>(
                 val giveUp = if (token == null) {
                     started.elapsedNow() > firstConnectFor
                 } else {
-                    (droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it }).elapsedNow() > RETRY_FOR
+                    (droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it }).elapsedNow() > retryFor
                 }
                 if (giveUp) end = EndReason.Unreachable
             }
@@ -232,6 +241,26 @@ public class NearbyClient<M, V>(
             }
             _status.value = if (token == null) ClientStatus.Connecting else ClientStatus.Reconnecting
             delay(1_000)
+        }
+    }
+
+    /**
+     * Runs one connect attempt, and cancels it when [left] runs out before [done] (the key exchange is through). A port
+     * that takes the TCP connect and then never answers the upgrade would otherwise hold the joiner on Connecting or
+     * Reconnecting for good (night run 8 Nov, host_kill: still Reconnecting 33 s after [RETRY_FOR]). After the key
+     * exchange the WebSocket pings watch the link, so a long match is never cut.
+     */
+    private suspend fun bounded(left: Duration?, done: () -> Boolean, attempt: suspend () -> Unit) = coroutineScope {
+        val job = launch { attempt() }
+        if (left != null) {
+            val watchdog = launch {
+                delay(left)
+                if (!done()) {
+                    trace("joiner: attempt out of time")
+                    job.cancel()
+                }
+            }
+            job.invokeOnCompletion { watchdog.cancel() }
         }
     }
 

@@ -54,6 +54,9 @@ The phone with the hotspot can host or join. A match on a hotspot is an owner te
   secret: exclude that file from backup and device transfer (`android:dataExtractionRules` on Android 12+ and
   `android:fullBackupContent` before), so a restored or new phone never gets it.
 - A killed host ends the room: there is nothing to resume, and the joiner ends `Unreachable`.
+- `Reconnecting` never lasts more than about 2 minutes (`RETRY_FOR`), even when the host's address takes the
+  connection and then hangs. After `Reconnecting`, `Ended(Unreachable)` means the host is gone: show "The host left.
+  Back to the menu." with one button to the menu, not a retry spinner.
 
 ## Play again
 
