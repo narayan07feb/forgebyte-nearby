@@ -60,7 +60,9 @@ class MainActivity : Activity() {
         // code the host shows, or the first room found nearby) instead of hosting; `--ei think <ms>` waits before each own
         // move (default 700); `--es name <text>` is this phone's player name (default the phone model).
         // Host only: `--es room <text>` room name, `--ei seats <n>` (default 4), `--ei turn <ms>` turn timer (0: off;
-        // default the library's), `--ez hold true` waits in the lobby until `--ez start true`.
+        // default the library's), `--ez hold true` waits in the lobby until `--ez start true`, `--ez approveCode true`
+        // makes full-code joins wait for the host too (RoomConfig.approveCodeJoins), `--ez decline true` declines every
+        // request instead of accepting it.
         // Either side: `--ez leave true` leaves (see onNewIntent).
         val name = intent.getStringExtra("name")
         val joinCode = intent.getStringExtra("join")
@@ -90,6 +92,7 @@ class MainActivity : Activity() {
                 roomName = intent.getStringExtra("room") ?: "Nearby test ${Build.MODEL}", hostName = name ?: "Host",
                 gameVersion = DemoGame.VERSION, roomSecret = code, maxSeats = intent.getIntExtra("seats", 4),
                 turnTimeoutMs = intent.getIntExtra("turn", 30_000).toLong(), // 30 s is the library default
+                approveCodeJoins = intent.getBooleanExtra("approveCode", false),
             ),
             scope,
         )
@@ -110,9 +113,13 @@ class MainActivity : Activity() {
                     rooms.forEach { say("discovered '${it.roomName}' at ${it.host}:${it.port}, free ${it.seatsFree}, canJoin ${it.canJoin(DemoGame.VERSION)}") }
                 }
             }
+            val decline = intent.getBooleanExtra("decline", false)
             launch {
                 room.joinRequests.collect { list ->
-                    list.forEach { say("request ${it.id} from ${it.name}, check code ${it.checkCode}: accepting"); room.acceptJoin(it.id) }
+                    list.forEach {
+                        say("request ${it.id} from ${it.name}, check code ${it.checkCode}: ${if (decline) "declining" else "accepting"}")
+                        if (decline) room.declineJoin(it.id) else room.acceptJoin(it.id)
+                    }
                 }
             }
             launch {
