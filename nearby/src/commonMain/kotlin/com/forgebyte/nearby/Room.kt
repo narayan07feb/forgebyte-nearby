@@ -329,11 +329,17 @@ public class Room<S, M, V>(
 
     /**
      * Lobby: the seat goes away. In a game: a bot plays it from now on; after a drop past the reconnect window
-     * ([keepToken]) the player can still come back with their token and take it over again.
+     * ([keepToken]) the player can still come back with their token and take it over again. After the game
+     * ([Phase.OVER]): the seat keeps its kind and name, so the result still shows the player; only the connection goes.
      */
     private fun drop(seat: Int, keepToken: Boolean = false) {
         if (phase == Phase.LOBBY) {
             seats.removeAt(seat)
+            broadcastLobby()
+            return
+        }
+        if (phase == Phase.OVER) {
+            seats[seat].apply { conn = null; droppedAt = null }
             broadcastLobby()
             return
         }
