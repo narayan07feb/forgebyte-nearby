@@ -39,7 +39,7 @@ dependencies {
 }
 
 // The fake peer and fake host (nearby-testing) are for debug builds only. Fails if one reaches a release classpath.
-// Games copy this task and list every non-debug build type (uno and satti: release and lava).
+// Games copy this task and list every build type that must stay free of test code (docs/ADAPTERS.md).
 val verifyNoNearbyTestingInRelease by tasks.registering {
     val classpaths = listOf("releaseRuntimeClasspath").map { configurations.named(it) }
     doLast {

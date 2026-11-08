@@ -177,14 +177,18 @@ library, not answers for the form:
 The script gets each new view and returns a move, or null when it has nothing to do (not its turn, game over). It
 must return legal moves: a refused move gets no new view, so the fake waits until the next one.
 
-1. **Dependency, debug only.** In the app module: `debugImplementation("com.github.narayan07feb.forgebyte-nearby:nearby-testing:<tag>")`.
-   Never `implementation`: release and lava builds must not hold it.
-2. **Guard.** Copy `verifyNoNearbyTestingInRelease` from `sample-host/build.gradle.kts`, list every non-debug build
-   type (`releaseRuntimeClasspath`, `lavaRuntimeClasspath`) and hook it to `check`. It fails when `nearby-testing`
+1. **Dependency, test builds only.** In the app module:
+   `debugImplementation("com.github.narayan07feb.forgebyte-nearby:nearby-testing:<tag>")`, plus the same line for each
+   other build type that carries the game's test tools. Never `implementation`: the store build must not hold it.
+   - uno (8 Nov): `lava` and `benchmark` carry its test tools (`src/androidTestTools`), so they may hold it too.
+   - satti (8 Nov): `lava` and `benchmark` are release code, so only `debug` holds it.
+2. **Guard.** Copy `verifyNoNearbyTestingInRelease` from `sample-host/build.gradle.kts`, list the runtime classpath of
+   every build type that must stay free of test code (uno: `releaseRuntimeClasspath`; satti: also
+   `lavaRuntimeClasspath` and `benchmarkRuntimeClasspath`) and hook it to `check`. It fails when `nearby-testing`
    reaches one of them.
-3. **Code in the debug source set.** Main code cannot see a debug-only class. Put the fake in the debug source set and
-   a no-op with the same name in each other build type's source set. In a KMP app module these are
-   `src/androidDebug/kotlin`, `src/androidRelease/kotlin` and `src/androidLava/kotlin` (check the names with a build).
+3. **Code in the test source set.** Main code cannot see a test-only class. Put the fake in the source set of the
+   build types that hold `nearby-testing`, and a no-op with the same name in the others. In a KMP app module these are
+   `src/androidDebug/kotlin`, `src/androidRelease/kotlin` and so on (check the names with a build); uno already has `src/androidTestTools/kotlin`.
 
 ```kotlin
 // src/androidDebug/kotlin/.../DebugNearby.kt
@@ -197,7 +201,7 @@ object DebugNearby {
     }
 }
 
-// src/androidRelease/kotlin/.../DebugNearby.kt (and androidLava): same shape, does nothing
+// src/androidRelease/kotlin/.../DebugNearby.kt (and each other store-like build type): same shape, does nothing
 object DebugNearby {
     fun addPeer(host: NearbyHost<*, SattiMove, SattiSeatView>, port: Int, scope: CoroutineScope) = Unit
 }
