@@ -178,7 +178,7 @@ public class NearbyClient<M, V>(
                             send = { send(Frame.Text(it)) },
                         )
                     } ?: Handshake.Failed
-                    trace("joiner: key exchange $shake")
+                    trace("joiner: key exchange ${shake::class.simpleName}")
                     val secure = when (shake) {
                         is Handshake.Ok -> shake.session
                         Handshake.VersionMismatch -> {
