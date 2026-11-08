@@ -194,9 +194,8 @@ public class NearbyClient<M, V>(
                         joinId = joinId.takeIf { token == null },
                     )
                     send(hello)
-                    // A code join can wait for the host too (RoomConfig.approveCodeJoins); a room that seats it at once
-                    // sends the Welcome within one round trip.
-                    if (token == null) _status.value = ClientStatus.WaitingForHost
+                    // A code join waits only when the host says so (HostMsg.Waiting).
+                    if (hello.roomSecret == null && token == null) _status.value = ClientStatus.WaitingForHost
                     for (frame in incoming) {
                         // A frame that does not decrypt was changed, replayed or reordered: treat it as a drop.
                         val text = (frame as? Frame.Binary)?.let { secure.open(it.data) } ?: break
@@ -283,6 +282,7 @@ public class NearbyClient<M, V>(
                 _lobby.value = msg.lobby
                 _status.value = ClientStatus.Connected
             }
+            HostMsg.Waiting -> _status.value = ClientStatus.WaitingForHost
             is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
             is HostMsg.View -> if (msg.seq > lastSeq) {
                 lastSeq = msg.seq

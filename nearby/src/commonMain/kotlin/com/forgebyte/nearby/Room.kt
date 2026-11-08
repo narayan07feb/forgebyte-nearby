@@ -248,6 +248,7 @@ public class Room<S, M, V>(
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = checkCodeOf(conn)
+                if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
             }
         }
@@ -258,6 +259,7 @@ public class Room<S, M, V>(
                 return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
             }
             pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn), h.joinId)
+            if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
             return
         }
         seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn).apply { joinId = h.joinId }

@@ -17,13 +17,29 @@ class ApproveCodeJoinsTest {
 
     @Test
     fun givenApprovingRoom_whenCodeJoinThenHostAccepts_thenWaitsWithoutSeatAndIsSeatedOnAccept() {
-        assertEquals(emptyList(), h.hello("a", name = "Asha"), "nothing is sent until the host answers")
+        assertEquals(listOf<HostMsg>(HostMsg.Waiting), h.hello("a", name = "Asha").to("a"), "told to wait, not closed")
         assertEquals(listOf(JoinRequest(1, "Asha", "")), room.joinRequests)
         assertEquals(1, room.seatCount)
 
         assertEquals(1, room.acceptJoin(1).welcome("a").lobby.yourSeat)
         assertEquals(2, room.seatCount)
         assertEquals(emptyList(), room.joinRequests)
+    }
+
+    @Test
+    fun givenDefaultRoom_whenCodeJoin_thenWelcomedWithoutAWaitMessage() {
+        val out = Harness(FakeGame()).hello("a").to("a")
+        assertIs<HostMsg.Welcome>(out.first())
+        assertTrue(HostMsg.Waiting !in out)
+    }
+
+    @Test
+    fun givenWaitingCodeJoin_whenItRetriesOnANewSocketWithItsJoinId_thenToldToWaitAgainAndOldSocketClosed() {
+        h.hello("a", joinId = "j1")
+        val out = h.hello("a2", joinId = "j1")
+        assertEquals(listOf<HostMsg>(HostMsg.Waiting), out.to("a2"))
+        assertTrue(out.closed("a"))
+        assertEquals(1, room.joinRequests.size)
     }
 
     @Test

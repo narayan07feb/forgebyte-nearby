@@ -61,6 +61,15 @@ public sealed interface HostMsg {
     @SerialName("welcome")
     public data class Welcome(val reconnectToken: String, val lobby: Lobby) : HostMsg
 
+    /**
+     * A join with the full code is waiting for the host's answer (the room has [RoomConfig.approveCodeJoins]). A join
+     * request needs no such message: the joiner knows it waits. Joiners before v0.3.8 skip this message (an unknown
+     * type decodes to null) and show Connecting until the answer.
+     */
+    @Serializable
+    @SerialName("waiting")
+    public data object Waiting : HostMsg
+
     @Serializable
     @SerialName("refused")
     public data class Refused(val reason: RefuseReason, val message: String) : HostMsg

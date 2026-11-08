@@ -35,7 +35,7 @@ only `viewFor(state, seat)`.
 
 For a request (nearby, short code, or full code in a room that approves code joins), show `checkCode` on the joiner
 while it waits, and the request's `checkCode` next to Accept/Decline on the host. A full-code join in a room that does
-not approve shows `WaitingForHost` for one round trip at most, then `Connected`.
+not approve goes from `Connecting` straight to `Connected`, as before.
 
 **No Wi-Fi.** A phone hotspot is a shared network like any other, so every join way above works on it. The library
 does not start a hotspot (the in-app hotspot is parked, owner 7 Nov). Put this help text on the nearby screen, next
