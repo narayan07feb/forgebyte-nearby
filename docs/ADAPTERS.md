@@ -42,6 +42,24 @@ to the empty room list:
 
 The phone with the hotspot can host or join. A match on a hotspot is an owner test (it needs a settings change).
 
+## Seat back after the app was killed (ceo, 2026-11-07)
+
+- Pass a `SeatStore` to `NearbyClient(..., seatStore = store)`. The client saves a `SavedSeat` on every welcome and
+  clears it when the seat ends for good (left, kicked, refused, host left, unreachable). A kill does not clear it.
+- On the next app start, if `store.load()` is not null, offer "Back to your game" and call `client.resume(saved)`. The
+  room key is checked before the token is sent, so another host now on the same address never gets it
+  (`EndReason.HostKeyMismatch`). The host gives the seat back, also after a bot took it over.
+- The default store is memory only (a killed app loses the seat to a bot). Back it with private app storage, for
+  example `SharedPreferences` holding `saved.toText()` and read back with `SavedSeat.parse`. The token is a seat
+  secret: exclude that file from backup and device transfer (`android:dataExtractionRules` on Android 12+ and
+  `android:fullBackupContent` before), so a restored or new phone never gets it.
+- A killed host ends the room: there is nothing to resume, and the joiner ends `Unreachable`.
+
+## Play again
+
+There is no rematch in a room: after `Phase.OVER` the room is done. To play again, the host opens a new room and the
+players join it (ceo, 2026-11-07: games open a new room).
+
 ## Motion for room screens (Compose recipe)
 
 The library has no UI. These are the three moves a nearby screen needs and the values to use (Compose foundation
@@ -128,6 +146,9 @@ screen open shows no new janky frames compared with the build before the change.
    join it again.
 8. **iOS (week 3, not built yet).** The plan is `NSLocalNetworkUsageDescription` and `NSBonjourServices` with
    `_forgebyte._tcp` in `Info.plist`.
+9. **Debug log (optional, debug builds only).** `NearbyTrace.sink = { Log.d("NearbyTrace", it) }` shows the
+   library's connect, key exchange, drop and retry lines, so a join that hangs on a phone can be read from logcat. The
+   lines hold no keys, codes, names, moves or views. Leave it null in release builds.
 
 **Play Data safety and Families: guidance only, check with the owner before filing.** These are facts about the
 library, not answers for the form:
