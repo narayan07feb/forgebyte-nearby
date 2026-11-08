@@ -135,6 +135,9 @@ screen open shows no new janky frames compared with the build before the change.
    "Call NearbyAndroid.init(context) before nearby discovery on Android."
 3. **Manifest.** The library merges two install-time permissions, `INTERNET` and `CHANGE_WIFI_MULTICAST_STATE` (no
    prompt, no "Nearby devices" permission). It also removes dns-sd-kt's startup initializer. Do not add it back.
+   To keep it that way, copy the sample's `verifyNoNearbyStartup` task (`sample-host/build.gradle.kts`) into the app
+   module and hook it to `check`: it fails on any content provider or androidx.startup initializer in the merged
+   manifest other than ProfileInstallerInitializer (owner rule, 8 Nov: no SDK may slow app start-up).
 4. **R8 (release builds).** Nothing to add. The library ships its own R8 rules (`nearby/consumer-rules.pro`, from
    v0.3.6), and the sample's minified release build has no rules of its own. On v0.3.5 or older,
    add `-dontwarn java.lang.management.**` to the game's `proguard-rules.pro`.
