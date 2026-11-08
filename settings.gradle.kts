@@ -17,6 +17,7 @@ dependencyResolutionManagement {
 rootProject.name = "forgebyte-nearby"
 
 include(":nearby")
+include(":nearby-testing")
 
 // Test tools, not published: a demo game, a host app for the phone, and a Mac client (PLAN device test 4b).
 include(":demo")

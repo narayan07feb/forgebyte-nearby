@@ -165,6 +165,47 @@ library, not answers for the form:
   seats.
 - Satti (Families): no data goes to other players beyond the display name typed in the room (and the moves).
 
+## A test player on one phone (nearby-testing, debug builds only)
+
+`nearby-testing` has two fixtures that use only the public API, so the game's real screens run:
+
+- `FakePeer`: a second player on the same phone. It joins the game's own `NearbyHost` on 127.0.0.1, says ready and
+  plays the move its script picks. With `autoAccept = false` its request waits for the game's approve button.
+- `FakeHost`: a host on the same phone (loopback only). It accepts every request, starts when it can, and plays
+  seat 0 by script. Pass `open()`'s `RoomAd` to the game's own `NearbyClient.requestJoin` to try the joiner screens.
+
+The script gets each new view and returns a move, or null when it has nothing to do (not its turn, game over). It
+must return legal moves: a refused move gets no new view, so the fake waits until the next one.
+
+1. **Dependency, debug only.** In the app module: `debugImplementation("com.github.narayan07feb.forgebyte-nearby:nearby-testing:<tag>")`.
+   Never `implementation`: release and lava builds must not hold it.
+2. **Guard.** Copy `verifyNoNearbyTestingInRelease` from `sample-host/build.gradle.kts`, list every non-debug build
+   type (`releaseRuntimeClasspath`, `lavaRuntimeClasspath`) and hook it to `check`. It fails when `nearby-testing`
+   reaches one of them.
+3. **Code in the debug source set.** Main code cannot see a debug-only class. Put the fake in the debug source set and
+   a no-op with the same name in each other build type's source set. In a KMP app module these are
+   `src/androidDebug/kotlin`, `src/androidRelease/kotlin` and `src/androidLava/kotlin` (check the names with a build).
+
+```kotlin
+// src/androidDebug/kotlin/.../DebugNearby.kt
+object DebugNearby {
+    /** Adds a scripted second player to the room this phone hosts. */
+    fun addPeer(host: NearbyHost<*, SattiMove, SattiSeatView>, port: Int, scope: CoroutineScope) {
+        FakePeer(SattiNearbyGame.ID, SattiNearbyGame.VERSION, SattiMove.serializer(), SattiSeatView.serializer(), scope,
+            name = "Test player") { view -> if (view.isMyTurn) view.legalMoves.firstOrNull() else null }
+            .join(host, port)
+    }
+}
+
+// src/androidRelease/kotlin/.../DebugNearby.kt (and androidLava): same shape, does nothing
+object DebugNearby {
+    fun addPeer(host: NearbyHost<*, SattiMove, SattiSeatView>, port: Int, scope: CoroutineScope) = Unit
+}
+```
+
+Call `DebugNearby.addPeer(host, port, scope)` after `host.open()`, from a button that only debug builds show
+(`BuildConfig.DEBUG`). The names in the script (`isMyTurn`, `legalMoves`, `ID`) stand for the game's own.
+
 ## Satti: fit check (read-only, 2026-11-03, satti main)
 
 `shared/.../domain`: `GameEngine`, `GameState` (serializable), `Card(suit, value)`, `SuitPile`, `SmartAI`, `EasyAI`.

@@ -35,7 +35,21 @@ kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarg
 dependencies {
     implementation(project(":demo"))
     implementation(libs.kotlinx.coroutines.android)
+    debugImplementation(project(":nearby-testing")) // here only so verifyNoNearbyTestingInRelease has something to catch
 }
+
+// The fake peer and fake host (nearby-testing) are for debug builds only. Fails if one reaches a release classpath.
+// Games copy this task and list every non-debug build type (uno and satti: release and lava).
+val verifyNoNearbyTestingInRelease by tasks.registering {
+    val classpaths = listOf("releaseRuntimeClasspath").map { configurations.named(it) }
+    doLast {
+        classpaths.forEach { cp ->
+            val found = cp.get().incoming.resolutionResult.allComponents.map { it.id.displayName }.filter { "nearby-testing" in it }
+            check(found.isEmpty()) { "$found is in ${cp.name}; add nearby-testing with debugImplementation only" }
+        }
+    }
+}
+tasks.named("check") { dependsOn(verifyNoNearbyTestingInRelease) }
 
 // ceo, 2026-11-03: nothing from nearby may run at app start. Owner rule, 2026-11-08: no SDK may slow app start-up.
 // Fails if the merged app manifest (debug and release) has any content provider other than androidx.startup's, or
