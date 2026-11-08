@@ -34,7 +34,8 @@ class Harness<S, M, V>(
         const val REQUEST_TIMEOUT = 20_000L
 
         /** Pacing and the turn timer are off unless a test asks, so older tests keep their meaning. */
-        fun config(maxSeats: Int = 4, minSeats: Int = 2, maxPending: Int = 4, botDelayMs: Long = 0, turnTimeoutMs: Long = 0) = RoomConfig(
+        fun config(maxSeats: Int = 4, minSeats: Int = 2, maxPending: Int = 4, botDelayMs: Long = 0, turnTimeoutMs: Long = 0,
+                   approveCodeJoins: Boolean = false) = RoomConfig(
             roomName = "Den",
             hostName = "Host",
             gameVersion = GAME_VERSION,
@@ -46,6 +47,7 @@ class Harness<S, M, V>(
             maxPendingRequests = maxPending,
             botDelayMs = botDelayMs,
             turnTimeoutMs = turnTimeoutMs,
+            approveCodeJoins = approveCodeJoins,
         )
     }
 }

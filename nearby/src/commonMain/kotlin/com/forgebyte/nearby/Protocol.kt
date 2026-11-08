@@ -16,7 +16,8 @@ public const val PROTOCOL_VERSION: Int = 2
 public sealed interface ClientMsg {
     /**
      * First message on every connection. With [reconnectToken]: take back that seat after a drop. With [roomSecret]
-     * (from the QR or typed code): join at once. With neither: ask the host to let you in.
+     * (from the QR or typed code): join at once, or wait for the host if the room approves code joins. With neither:
+     * ask the host to let you in.
      */
     @Serializable
     @SerialName("hello")
