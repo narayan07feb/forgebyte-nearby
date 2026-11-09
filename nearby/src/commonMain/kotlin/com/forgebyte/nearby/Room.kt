@@ -13,8 +13,8 @@ public class RoomConfig(
     public val gameVersion: Int,
     /**
      * The secret in the full join code ([JoinCode], QR or typed). Anyone who has the full code gets a seat with no host
-     * approval and no check code, until the game starts or the room is full. Make it with a secure random source, and
-     * share the code only in person or by QR.
+     * approval and no check code, until the game starts or the room is full, unless [approveCodeJoins] is true. Make it
+     * with a secure random source, and share the code only in person or by QR.
      */
     public val roomSecret: String,
     public val maxSeats: Int,
@@ -31,6 +31,16 @@ public class RoomConfig(
      * the host, like the online games' turn timer (owner, 2026-11-03). 0: no timer.
      */
     public val turnTimeoutMs: Long = 30_000,
+    /**
+     * When true, a joiner who has the full join code (QR or typed, [roomSecret] included) also waits for the host: the
+     * join goes to [NearbyHost.joinRequests] with its check code, like a room found nearby, and the host accepts or
+     * declines it. A wrong code is still refused at once, and the code still pins the room's key.
+     *
+     * When false (the default), the full code seats the joiner straight away, with no host step, until the game starts
+     * or the room is full. Use true when the code may travel beyond the table (a photo of the QR, a forwarded message).
+     * Short codes ([ShortCode]) and rooms found nearby always wait for the host, whatever this is.
+     */
+    public val approveCodeJoins: Boolean = false,
 ) {
     init {
         require(minSeats in 1..maxSeats) { "need 1 <= minSeats <= maxSeats" }
@@ -57,8 +67,9 @@ public sealed interface RoomOutput {
  * Seat 0 is the host. In the lobby a seat that leaves, is kicked or stays dropped past the reconnect window is
  * removed; once the game started, a host bot takes that seat over so the game can go on.
  *
- * Three ways in: a hello with the room code (QR or typed) takes a seat at once; a hello with a reconnect token
- * takes back that seat; a hello with neither is a join request (name only) that waits for the host's answer.
+ * Three ways in: a hello with the room code (QR or typed) takes a seat at once (or waits for the host, with
+ * [RoomConfig.approveCodeJoins]); a hello with a reconnect token takes back that seat; a hello with neither is a join
+ * request (name only) that waits for the host's answer.
  */
 public class Room<S, M, V>(
     private val game: NearbyGame<S, M, V>,
@@ -237,16 +248,18 @@ public class Room<S, M, V>(
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = checkCodeOf(conn)
+                if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
             }
         }
         if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
         if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
-        if (h.roomSecret == null) {
+        if (h.roomSecret == null || config.approveCodeJoins) { // the secret, if any, was checked above
             if (pending.size >= config.maxPendingRequests) {
                 return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
             }
             pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn), h.joinId)
+            if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
             return
         }
         seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn).apply { joinId = h.joinId }

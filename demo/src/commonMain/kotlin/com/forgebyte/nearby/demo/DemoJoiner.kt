@@ -44,6 +44,9 @@ public suspend fun playAsJoiner(
     val client = NearbyClient(DemoGame.ID, DemoGame.VERSION, DemoMove.serializer(), DemoView.serializer(), scope, seatStore = seatStore)
     onClient(client)
     val start = TimeSource.Monotonic.markNow()
+    // From the start, so a run shows whether the joiner waited for the host (and with which check code) or not.
+    scope.launch { client.status.collect { say("status $it") } }
+    scope.launch { client.checkCode.collect { if (it != null) say("check code $it (the host sees the same)") } }
     try {
         if (resume) {
             val saved = seatStore.load() ?: return false.also { say("FAIL no saved seat to resume") }
@@ -71,8 +74,6 @@ public suspend fun playAsJoiner(
 
         val rtts = mutableListOf<Duration>()
         var sentAt: TimeSource.Monotonic.ValueTimeMark? = null
-        scope.launch { client.status.collect { say("status $it") } }
-        scope.launch { client.checkCode.collect { if (it != null) say("check code $it (the host sees the same)") } }
         scope.launch { client.turnTimer.collect { t -> if (t != null) say("turn clock: seat ${t.seat}, ${t.remaining.inWholeMilliseconds} ms left") } }
         scope.launch { client.rejections.collect { say("move refused: $it") } }
         scope.launch {

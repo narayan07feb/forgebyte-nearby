@@ -41,7 +41,8 @@ public data class RoomAd(
  * [fingerprint] pins the room's encryption key, so a code join cannot be intercepted on the way.
  *
  * Anyone who has this full code gets a seat with no host approval and no check code, until the game starts or the room
- * is full. Share it only in person or by QR; the host can kick a seat it does not know.
+ * is full, unless the host set [RoomConfig.approveCodeJoins]. Share it only in person or by QR; the host can kick a seat
+ * it does not know.
  */
 public data class JoinCode(val host: String, val port: Int, val secret: String, val fingerprint: String) {
     override fun toString(): String = "$host:$port:$secret:$fingerprint"

@@ -113,7 +113,9 @@ public class NearbyClient<M, V>(
 
     /**
      * Joins with the full room code from the QR or typed code. The host does not approve this join and no check code
-     * is shown: whoever has the full code gets a seat until the game starts (see [JoinCode]).
+     * is needed: whoever has the full code gets a seat until the game starts (see [JoinCode]). A room with
+     * [RoomConfig.approveCodeJoins] is the exception: there [status] is [ClientStatus.WaitingForHost] until the host
+     * answers, so show [checkCode] as for [requestJoin].
      */
     public fun join(code: JoinCode, name: String): Job = connect(code.host, code.port, code.secret, code.fingerprint, name)
 
@@ -201,6 +203,7 @@ public class NearbyClient<M, V>(
                         joinId = joinId.takeIf { token == null },
                     )
                     send(hello)
+                    // A code join waits only when the host says so (HostMsg.Waiting).
                     if (hello.roomSecret == null && token == null) _status.value = ClientStatus.WaitingForHost
                     for (frame in incoming) {
                         // A frame that does not decrypt was changed, replayed or reordered: treat it as a drop.
@@ -308,6 +311,7 @@ public class NearbyClient<M, V>(
                 _lobby.value = msg.lobby
                 _status.value = ClientStatus.Connected
             }
+            HostMsg.Waiting -> _status.value = ClientStatus.WaitingForHost
             is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
             is HostMsg.View -> if (msg.seq > lastSeq) {
                 lastSeq = msg.seq

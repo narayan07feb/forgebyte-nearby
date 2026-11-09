@@ -29,10 +29,13 @@ only `viewFor(state, seat)`.
   declines it and both screens show the same check code. A null from `parse` means a typo: ask the player to check the
   code. It ends `EndReason.Unreachable` when the phones are on different networks.
 - **Full code or QR:** `host.joinCodes(port)` and `NearbyClient.join(code, name)`. It holds the room secret, so it
-  seats the joiner with no host approval: show it only to the people at the table.
+  seats the joiner with no host approval: show it only to the people at the table. With
+  `RoomConfig(approveCodeJoins = true)` it waits for the host like a request (the code may then travel further, such
+  as a photo of the QR); the joiner's `status` is `WaitingForHost` until the host answers.
 
-For a request (nearby or short code), show `checkCode` on the joiner while it waits, and the request's `checkCode`
-next to Accept/Decline on the host.
+For a request (nearby, short code, or full code in a room that approves code joins), show `checkCode` on the joiner
+while it waits, and the request's `checkCode` next to Accept/Decline on the host. A full-code join in a room that does
+not approve goes from `Connecting` straight to `Connected`, as before.
 
 **No Wi-Fi.** A phone hotspot is a shared network like any other, so every join way above works on it. The library
 does not start a hotspot (the in-app hotspot is parked, owner 7 Nov). Put this help text on the nearby screen, next
