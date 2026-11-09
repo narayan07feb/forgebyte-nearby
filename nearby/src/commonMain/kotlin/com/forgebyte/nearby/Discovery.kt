@@ -41,7 +41,8 @@ public data class RoomAd(
  * [fingerprint] pins the room's encryption key, so a code join cannot be intercepted on the way.
  *
  * Anyone who has this full code gets a seat with no host approval and no check code, until the game starts or the room
- * is full. Share it only in person or by QR; the host can kick a seat it does not know.
+ * is full, unless the host set [RoomConfig.approveCodeJoins]. Share it only in person or by QR; the host can kick a seat
+ * it does not know.
  */
 public data class JoinCode(val host: String, val port: Int, val secret: String, val fingerprint: String) {
     override fun toString(): String = "$host:$port:$secret:$fingerprint"
@@ -75,7 +76,7 @@ internal fun roomTxt(gameId: String, config: RoomConfig, freeSeats: Int, address
         Txt.GAME to gameId,
         Txt.PROTOCOL to PROTOCOL_VERSION.toString(),
         Txt.GAME_VERSION to config.gameVersion.toString(),
-        Txt.NAME to config.roomName.take(MAX_ROOM_NAME),
+        Txt.NAME to config.roomName.cutText(MAX_ROOM_NAME),
         Txt.FREE to freeSeats.toString(),
     ) + addresses.filter(::isIpv4).take(MAX_TXT_ADDRESSES).joinToString(",").let { if (it.isEmpty()) emptyMap() else mapOf(Txt.ADDRESS to it) }
 
@@ -85,6 +86,9 @@ private fun isIpv4(text: String) = IPV4.matchEntire(text)?.groupValues?.drop(1)?
 private fun network(address: String) = address.substringBeforeLast('.')
 
 internal const val MAX_ROOM_NAME = 40
+
+/** The mDNS service name: one DNS label, so at most 63 bytes in UTF-8 (RFC 6763 4.1.1); a Hindi room name is longer. */
+internal fun serviceName(config: RoomConfig): String = config.roomName.cutText(MAX_ROOM_NAME, maxUtf8Bytes = 63)
 
 /** Rooms of [gameId] on the local network, updated as they appear, change and go away. */
 public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {

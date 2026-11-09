@@ -16,7 +16,8 @@ public const val PROTOCOL_VERSION: Int = 2
 public sealed interface ClientMsg {
     /**
      * First message on every connection. With [reconnectToken]: take back that seat after a drop. With [roomSecret]
-     * (from the QR or typed code): join at once. With neither: ask the host to let you in.
+     * (from the QR or typed code): join at once, or wait for the host if the room approves code joins. With neither:
+     * ask the host to let you in.
      */
     @Serializable
     @SerialName("hello")
@@ -59,6 +60,15 @@ public sealed interface HostMsg {
     @Serializable
     @SerialName("welcome")
     public data class Welcome(val reconnectToken: String, val lobby: Lobby) : HostMsg
+
+    /**
+     * A join with the full code is waiting for the host's answer (the room has [RoomConfig.approveCodeJoins]). A join
+     * request needs no such message: the joiner knows it waits. Joiners before v0.3.8 skip this message (an unknown
+     * type decodes to null) and show Connecting until the answer.
+     */
+    @Serializable
+    @SerialName("waiting")
+    public data object Waiting : HostMsg
 
     @Serializable
     @SerialName("refused")

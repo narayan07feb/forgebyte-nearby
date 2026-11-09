@@ -13,7 +13,10 @@ import com.forgebyte.nearby.Lobby
 import com.forgebyte.nearby.NearbyClient
 import com.forgebyte.nearby.NearbyAndroid
 import com.forgebyte.nearby.NearbyHost
+import com.forgebyte.nearby.NearbyTrace
 import com.forgebyte.nearby.RoomConfig
+import com.forgebyte.nearby.SavedSeat
+import com.forgebyte.nearby.SeatStore
 import com.forgebyte.nearby.ShortCode
 import com.forgebyte.nearby.demo.DemoGame
 import com.forgebyte.nearby.discoverRooms
@@ -41,6 +44,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The library's connect and drop lines, for device runs (adb logcat -s NearbyTrace:I); this app is test-only.
+        NearbyTrace.sink = { Log.i("NearbyTrace", it) }
         // A big status line on top (room, code, seats, phase, hand) so a screenshot pair shows the same room on both phones.
         header = TextView(this).apply { setPadding(32, 32, 32, 16); textSize = 20f; setTypeface(typeface, android.graphics.Typeface.BOLD) }
         log = TextView(this).apply { setPadding(32, 16, 32, 32) }
@@ -56,19 +61,25 @@ class MainActivity : Activity() {
         // move (default 700); `--es name <text>` is this phone's player name (default the phone model); with find,
         // `--es findRoom <name>` joins only the room of that name (it logs every room it sees, with its address).
         // Host only: `--es room <text>` room name, `--ei seats <n>` (default 4), `--ei turn <ms>` turn timer (0: off;
-        // default the library's), `--ez hold true` waits in the lobby until `--ez start true`.
+        // default the library's), `--ez hold true` waits in the lobby until `--ez start true`, `--ez approveCode true`
+        // makes full-code joins wait for the host too (RoomConfig.approveCodeJoins), `--ez decline true` declines every
+        // request instead of accepting it.
         // Either side: `--ez leave true` leaves (see onNewIntent).
         val name = intent.getStringExtra("name")
         val joinCode = intent.getStringExtra("join")
         val shortText = intent.getStringExtra("short")
         val findRoom = intent.getStringExtra("findRoom")
-        if (joinCode != null || shortText != null || findRoom != null || intent.getBooleanExtra("find", false)) {
+        // `--ez resume true`: take back the seat saved before this app was killed (kept in private storage, out of
+        // backups and device transfer: see res/xml).
+        val resume = intent.getBooleanExtra("resume", false)
+        if (joinCode != null || shortText != null || findRoom != null || resume || intent.getBooleanExtra("find", false)) {
             val parsed = joinCode?.let(JoinCode::parse)
             val short = shortText?.let(ShortCode::parse)
             scope.launch {
                 if (joinCode != null && parsed == null) return@launch say("FAIL bad join code $joinCode")
                 if (shortText != null && short == null) return@launch say("FAIL bad short code $shortText")
-                val ok = playAsJoiner(parsed, name ?: Build.MODEL, intent.getIntExtra("think", 700).toLong(), short, findRoom, onClient = { c ->
+                val ok = playAsJoiner(parsed, name ?: Build.MODEL, intent.getIntExtra("think", 700).toLong(), short, findRoom,
+                    seatStore = PrefsSeatStore(this@MainActivity), resume = resume, onClient = { c ->
                     client = c
                     launch { combine(c.lobby, c.seqView, c.status) { l, sv, st -> show(l, sv?.view, "JOINER  $st") }.collect {} }
                 }, say = ::say)
@@ -83,6 +94,7 @@ class MainActivity : Activity() {
                 roomName = intent.getStringExtra("room") ?: "Nearby test ${Build.MODEL}", hostName = name ?: "Host",
                 gameVersion = DemoGame.VERSION, roomSecret = code, maxSeats = intent.getIntExtra("seats", 4),
                 turnTimeoutMs = intent.getIntExtra("turn", 30_000).toLong(), // 30 s is the library default
+                approveCodeJoins = intent.getBooleanExtra("approveCode", false),
             ),
             scope,
         )
@@ -103,9 +115,13 @@ class MainActivity : Activity() {
                     rooms.forEach { say("discovered '${it.roomName}' at ${it.host}:${it.port}, free ${it.seatsFree}, canJoin ${it.canJoin(DemoGame.VERSION)}") }
                 }
             }
+            val decline = intent.getBooleanExtra("decline", false)
             launch {
                 room.joinRequests.collect { list ->
-                    list.forEach { say("request ${it.id} from ${it.name}, check code ${it.checkCode}: accepting"); room.acceptJoin(it.id) }
+                    list.forEach {
+                        say("request ${it.id} from ${it.name}, check code ${it.checkCode}: ${if (decline) "declining" else "accepting"}")
+                        if (decline) room.declineJoin(it.id) else room.acceptJoin(it.id)
+                    }
                 }
             }
             launch {
@@ -180,4 +196,13 @@ class MainActivity : Activity() {
         Log.i("NearbyDemo", text)
         runOnUiThread { log.append(text + "\n") } // the joiner reports from background threads
     }
+}
+
+/** The saved seat in private SharedPreferences (nearby_seat.xml, excluded from backup and device transfer). */
+private class PrefsSeatStore(context: android.content.Context) : SeatStore {
+    private val prefs = context.getSharedPreferences("nearby_seat", android.content.Context.MODE_PRIVATE)
+    override fun load(): SavedSeat? = prefs.getString("seat", null)?.let(SavedSeat::parse)
+    // commit, not apply: the app may be killed right after a welcome, and the seat must already be on disk.
+    override fun save(seat: SavedSeat) { prefs.edit().putString("seat", seat.toText()).commit() }
+    override fun clear() { prefs.edit().remove("seat").commit() }
 }

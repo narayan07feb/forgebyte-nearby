@@ -36,7 +36,7 @@ class ProtocolTest {
     @Test
     fun givenEveryHostMessage_whenEncodedAndDecoded_thenEqual() {
         val messages = listOf(HostMsg.Welcome("tok", lobby), HostMsg.LobbyUpdate(lobby), HostMsg.View(9, json),
-            HostMsg.MoveRejected("no"), HostMsg.Kicked, HostMsg.RoomClosed(CloseReason.HOST_LEFT)) +
+            HostMsg.MoveRejected("no"), HostMsg.Kicked, HostMsg.Waiting, HostMsg.RoomClosed(CloseReason.HOST_LEFT)) +
             RefuseReason.entries.map { HostMsg.Refused(it, "why") }
         messages.forEach { assertEquals(it, NearbyProtocol.decodeHost(NearbyProtocol.encode(it))) }
     }
@@ -45,6 +45,7 @@ class ProtocolTest {
     fun givenMessage_whenEncoded_thenTypeTagIsShortName() {
         assertTrue(NearbyProtocol.encode(ClientMsg.Ready(true)).contains("\"t\":\"ready\""))
         assertEquals("{\"t\":\"leave\"}", NearbyProtocol.encode(ClientMsg.Leave))
+        assertEquals("{\"t\":\"waiting\"}", NearbyProtocol.encode(HostMsg.Waiting))
     }
 
     @Test

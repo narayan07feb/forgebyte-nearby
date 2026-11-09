@@ -134,7 +134,7 @@ public class NearbyHost<S, M, V>(
         ensureDiscoveryReady()
         lobby.map { if (it.phase == Phase.LOBBY) config.maxSeats - it.seats.size else 0 }.distinctUntilChanged()
             .collectLatest { free ->
-                publishService(SERVICE_TYPE, config.roomName.take(MAX_ROOM_NAME)) {
+                publishService(SERVICE_TYPE, serviceName(config)) {
                     this.port = port
                     txt = roomTxt(game.gameId, config, free, localAddresses())
                 }

@@ -177,6 +177,16 @@ class RoomTest {
 
     // Moves
 
+    private fun playToEnd() {
+        startWithA()
+        var turn = 0
+        while (room.phase == Phase.PLAYING) {
+            val s = room.state!!
+            if (turn == 0) room.hostMove(FakeMove(s.hands[0].first())) else room.onMessage("a", move(s.hands[1].first()))
+            turn = 1 - turn
+        }
+    }
+
     private fun startWithA(): FakeState {
         h.hello("a"); room.onMessage("a", ClientMsg.Ready(true)); room.start(seed = 3)
         return room.state!!
@@ -303,6 +313,28 @@ class RoomTest {
         assertEquals(SeatKind.BOT, out.lastLobby(HOST_CONN).seats[1].kind)
         assertEquals(0, room.state!!.turn, "the new bot played seat 1's turn")
         assertEquals(2, room.seatCount)
+    }
+
+    @Test
+    fun givenGameOver_whenPlayerLeaves_thenSeatStaysPlayer() {
+        playToEnd()
+        val out = room.onMessage("a", ClientMsg.Leave)
+
+        assertTrue(out.closed("a"))
+        val seat = out.lastLobby(HOST_CONN).seats[1]
+        assertEquals(SeatKind.PLAYER, seat.kind, "the result still shows the player, not a bot")
+        assertFalse(seat.connected)
+        assertEquals(Phase.OVER, room.phase)
+    }
+
+    @Test
+    fun givenGameOver_whenDropPastReconnectWindow_thenSeatStaysPlayer() {
+        playToEnd()
+        room.onDisconnect("a")
+        h.now = Harness.WINDOW
+        val out = room.tick()
+
+        assertEquals(SeatKind.PLAYER, out.lastLobby(HOST_CONN).seats[1].kind)
     }
 
     @Test

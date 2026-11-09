@@ -12,6 +12,7 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
@@ -67,6 +68,8 @@ public class NearbyClient<M, V>(
      * (seen on the Lava, 2026-11-03: "Host is down" until the phone sent traffic).
      */
     private val firstConnectFor: Duration = 10.seconds,
+    /** Where the seat is kept for [resume] after the app is killed; see [SeatStore]. Default: memory only. */
+    private val seatStore: SeatStore = InMemorySeatStore(),
 ) {
     private val http = HttpClient(CIO) {
         // One slow attempt must not use up the whole first-connect time: each try gets its own limit.
@@ -110,7 +113,9 @@ public class NearbyClient<M, V>(
 
     /**
      * Joins with the full room code from the QR or typed code. The host does not approve this join and no check code
-     * is shown: whoever has the full code gets a seat until the game starts (see [JoinCode]).
+     * is needed: whoever has the full code gets a seat until the game starts (see [JoinCode]). A room with
+     * [RoomConfig.approveCodeJoins] is the exception: there [status] is [ClientStatus.WaitingForHost] until the host
+     * answers, so show [checkCode] as for [requestJoin].
      */
     public fun join(code: JoinCode, name: String): Job = connect(code.host, code.port, code.secret, code.fingerprint, name)
 
@@ -129,6 +134,20 @@ public class NearbyClient<M, V>(
         return connect(host, code.port, secret = null, fingerprint = null, name)
     }
 
+    /**
+     * Takes back the seat this app had before it was killed ([SeatStore.load]). The room's key must match
+     * [SavedSeat.fingerprint] before the token is sent, so another host now on the same address never gets it
+     * ([EndReason.HostKeyMismatch]). The host gives the seat back, also after a bot took it over, unless the player
+     * left or was kicked; it then refuses, and the saved seat is cleared.
+     */
+    public fun resume(seat: SavedSeat): Job {
+        require(seat.gameId == gameId) { "the saved seat is for ${seat.gameId}, not $gameId" }
+        return connect(seat.host, seat.port, secret = null, fingerprint = seat.fingerprint, seat.name, resumeToken = seat.token)
+    }
+
+    /** How long a dropped seat keeps reconnecting before it ends [EndReason.Unreachable]; tests shorten it. */
+    internal var retryFor: Duration = RETRY_FOR
+
     /** This device's site-local IPv4 addresses; tests point it at loopback. */
     internal var myAddresses: () -> List<String> = ::localAddresses
 
@@ -136,17 +155,23 @@ public class NearbyClient<M, V>(
      * Connects and keeps the seat: after a drop it reconnects with the seat's token every second, until the host
      * answers or [RETRY_FOR] passes. The host decides whether the seat is still there.
      */
-    private fun connect(host: String, port: Int, secret: String?, fingerprint: String?, name: String): Job = scope.launch {
+    private fun connect(
+        host: String, port: Int, secret: String?, fingerprint: String?, name: String, resumeToken: String? = null,
+    ): Job = scope.launch {
         val started = TimeSource.Monotonic.markNow()
         val joinId = secureRandomBytes(16).toHex() // one per join, kept across retries until the Welcome
         var pinned = fingerprint // after the first join, every reconnect must reach the same room key
-        var token: String? = null
-        var droppedAt: TimeSource.Monotonic.ValueTimeMark? = null
+        var token: String? = resumeToken
+        // A resume is a reconnect from the start: its retry time runs from now, so a dead host cannot hold it.
+        var droppedAt: TimeSource.Monotonic.ValueTimeMark? = if (resumeToken != null) started else null
         while (true) {
             var end: EndReason? = null
+            // The time this attempt may take to get through the key exchange; null while there is no limit yet.
+            val left = if (token == null) firstConnectFor - started.elapsedNow() else droppedAt?.let { retryFor - it.elapsedNow() }
+            var shook = false
             try {
                 trace("joiner: connecting to $host:$port")
-                http.webSocket(host = host, port = port, path = WS_PATH) {
+                bounded(left, done = { shook }) { http.webSocket(host = host, port = port, path = WS_PATH) {
                     trace("joiner: socket open")
                     val shake = withTimeoutOrNull(HANDSHAKE_FOR) {
                         joinerHandshake(
@@ -155,7 +180,7 @@ public class NearbyClient<M, V>(
                             send = { send(Frame.Text(it)) },
                         )
                     } ?: Handshake.Failed
-                    trace("joiner: key exchange $shake")
+                    trace("joiner: key exchange ${shake::class.simpleName}")
                     val secure = when (shake) {
                         is Handshake.Ok -> shake.session
                         Handshake.VersionMismatch -> {
@@ -168,6 +193,7 @@ public class NearbyClient<M, V>(
                         }
                         Handshake.Failed -> return@webSocket // treated as a drop below
                     }
+                    shook = true
                     pinned = secure.hostFingerprint
                     _checkCode.value = secure.checkCode
                     link = Link(this, secure)
@@ -177,6 +203,7 @@ public class NearbyClient<M, V>(
                         joinId = joinId.takeIf { token == null },
                     )
                     send(hello)
+                    // A code join waits only when the host says so (HostMsg.Waiting).
                     if (hello.roomSecret == null && token == null) _status.value = ClientStatus.WaitingForHost
                     for (frame in incoming) {
                         // A frame that does not decrypt was changed, replayed or reordered: treat it as a drop.
@@ -186,11 +213,12 @@ public class NearbyClient<M, V>(
                             trace("joiner: welcome, seat ${msg.lobby.yourSeat}")
                             token = msg.reconnectToken
                             droppedAt = null
+                            seatStore.save(SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken))
                         }
                         end = handle(msg)
                         if (end != null) break
                     }
-                }
+                } }
             } catch (e: Exception) {
                 // Our own cancellation goes on up; a socket error or a cut session is a drop, handled below.
                 currentCoroutineContext().ensureActive()
@@ -203,18 +231,39 @@ public class NearbyClient<M, V>(
                 val giveUp = if (token == null) {
                     started.elapsedNow() > firstConnectFor
                 } else {
-                    (droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it }).elapsedNow() > RETRY_FOR
+                    (droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it }).elapsedNow() > retryFor
                 }
                 if (giveUp) end = EndReason.Unreachable
             }
             end?.let {
                 trace("joiner: ended $it")
+                if (token != null) seatStore.clear() // this seat is gone for good; a join that never got one keeps the store
                 _status.value = ClientStatus.Ended(it)
                 http.close()
                 return@launch
             }
             _status.value = if (token == null) ClientStatus.Connecting else ClientStatus.Reconnecting
             delay(1_000)
+        }
+    }
+
+    /**
+     * Runs one connect attempt, and cancels it when [left] runs out before [done] (the key exchange is through). A port
+     * that takes the TCP connect and then never answers the upgrade would otherwise hold the joiner on Connecting or
+     * Reconnecting for good (night run 8 Nov, host_kill: still Reconnecting 33 s after [RETRY_FOR]). After the key
+     * exchange the WebSocket pings watch the link, so a long match is never cut.
+     */
+    private suspend fun bounded(left: Duration?, done: () -> Boolean, attempt: suspend () -> Unit) = coroutineScope {
+        val job = launch { attempt() }
+        if (left != null) {
+            val watchdog = launch {
+                delay(left)
+                if (!done()) {
+                    trace("joiner: attempt out of time")
+                    job.cancel()
+                }
+            }
+            job.invokeOnCompletion { watchdog.cancel() }
         }
     }
 
@@ -262,6 +311,7 @@ public class NearbyClient<M, V>(
                 _lobby.value = msg.lobby
                 _status.value = ClientStatus.Connected
             }
+            HostMsg.Waiting -> _status.value = ClientStatus.WaitingForHost
             is HostMsg.LobbyUpdate -> _lobby.value = msg.lobby
             is HostMsg.View -> if (msg.seq > lastSeq) {
                 lastSeq = msg.seq
