@@ -146,6 +146,20 @@ class JoinIdTest {
     }
 
     @Test
+    fun givenSilentReconnectThenBotTakeover_whenKickedInTheGame_thenNeitherTokenComesBack() {
+        startWithA()
+        room.onDisconnect("a")
+        h.hello("a2", token = "tok1") // tok2 goes out; the joiner stays silent, so tok1 is still held
+        room.onDisconnect("a2")
+        h.now = Harness.WINDOW
+        room.tick() // a bot takes the seat over; both tokens could still bring the player back
+        room.kick(1)
+        assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a3", token = "tok1"), "a3"))
+        assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a4", token = "tok2"), "a4"))
+        assertEquals(SeatKind.BOT, room.hostLobby.seats[1].kind)
+    }
+
+    @Test
     fun givenTokenReconnect_whenTheJoinIdIsUsedAfterwards_thenItIsJustANewJoin() {
         h.hello("a", joinId = "J1")
         room.onDisconnect("a")

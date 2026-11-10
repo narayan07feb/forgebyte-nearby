@@ -364,6 +364,7 @@ public class Room<S, M, V>(
             takenOver = keepToken
             if (!keepToken) {
                 token = null
+                heldToken = null
                 joinId = null
             }
             conn = null
