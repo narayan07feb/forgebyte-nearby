@@ -291,6 +291,17 @@ join-id retry can only happen in the lobby. `CutBeforeWelcomeTest` (3) and `Join
 requests accepted or still waiting, a token beating a join id, and a kicked or departed player refused both ways.
 One earlier failure ("a joiner got no view after start", run 12) had no trace and stays **UNEXPLAINED**.
 
+**Lost Welcome on a reconnect (evidence, 2026-11-10).** `SocketOrderTest` plays every order of the socket events around
+one joiner on the real `Room` (4,112 orders with two cut sockets). It found a player losing their seat: the host swaps
+the token on every Welcome, so when a reconnect's Welcome died with its socket, the next retry carried the old token
+and got "Your seat is gone". Fixed: the host also takes the token the joiner came back with, until that joiner sends
+anything on the new socket. The joiner now sends no Ready or Move before its Welcome, so a message really proves the
+Welcome arrived. A kicked or departed player still cannot come back with it. What is left: a joiner who stays silent after a reconnect
+keeps its previous token valid until it next speaks; tokens only travel inside encrypted frames. No order of these
+events left a joiner without a view after start, so run 12 is not an ordering fault in `Room` with one joiner and up to
+two cut sockets; the transport and timing side is not covered and run 12 stays **UNEXPLAINED** (the Mac was heavily
+loaded that day).
+
 **2026-11-04 00:08 to 00:11, night run: MINIFIED (R8) `sample-host` release on the Lava (Android 16), Mac joiner,
 same Wi-Fi.** Code: main 29049bb (v0.3.2) plus the #11 test tools; APK 975,603 bytes.
 - Phone discovery after `NearbyAndroid.init` in the R8 build: the phone's NSD found its own room 1.05 s after the

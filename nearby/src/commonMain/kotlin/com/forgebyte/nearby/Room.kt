@@ -87,6 +87,8 @@ public class Room<S, M, V>(
         var takenOver = false
         /** The joiner's join id, so a retry that never got its Welcome finds this seat again. */
         var joinId: String? = null
+        /** The token the joiner came back with. Its Welcome can be lost, so this stays good until the joiner speaks. */
+        var heldToken: String? = null
     }
 
     private class Pending(val id: Int, var conn: String, val name: String, val at: Long, var checkCode: String, val joinId: String?)
@@ -134,8 +136,8 @@ public class Room<S, M, V>(
 
     public fun onMessage(conn: String, msg: ClientMsg): List<RoomOutput> = step {
         val seat = seatOf(conn)
-        // Any message after the Hello proves this connection got its Welcome: the join id is no longer needed.
-        if (seat != null && msg !is ClientMsg.Hello) seats[seat].joinId = null
+        // Any message after the Hello proves this connection got its Welcome: the older credentials are no longer needed.
+        if (seat != null && msg !is ClientMsg.Hello) seats[seat].apply { joinId = null; heldToken = null }
         when {
             msg is ClientMsg.Hello -> if (seat == null && pending.none { it.conn == conn }) hello(conn, msg)
             seat == null -> Unit // nothing but hello before a seat is given
@@ -235,9 +237,10 @@ public class Room<S, M, V>(
         if (refusal != null) return refuse(conn, refusal.first, refusal.second)
 
         if (h.reconnectToken != null) {
-            val seat = seats.indexOfFirst { t -> t.token?.let { sameSecret(it, h.reconnectToken) } == true }
+            val seat = seats.indexOfFirst { t -> listOfNotNull(t.token, t.heldToken).any { sameSecret(it, h.reconnectToken) } }
             if (seat < 0) return refuse(conn, RefuseReason.RECONNECT_EXPIRED, "Your seat is gone. Join again.")
             seats[seat].joinId = null // a token means the Welcome arrived
+            seats[seat].heldToken = h.reconnectToken
             return reseat(seat, conn)
         }
         if (h.joinId != null) {
@@ -299,7 +302,7 @@ public class Room<S, M, V>(
         out += RoomOutput.Close(conn)
     }
 
-    /** A fresh token on every welcome, so an old one cannot be replayed. */
+    /** A fresh token on every welcome, so an old one stops working as soon as the joiner shows it got the new one. */
     private fun welcome(seat: Int) {
         val token = newToken()
         seats[seat].token = token
@@ -361,6 +364,7 @@ public class Room<S, M, V>(
             takenOver = keepToken
             if (!keepToken) {
                 token = null
+                heldToken = null
                 joinId = null
             }
             conn = null
