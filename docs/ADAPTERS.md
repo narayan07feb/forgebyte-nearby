@@ -170,6 +170,8 @@ library, not answers for the form:
 
 ## A test player on one phone (nearby-testing, debug builds only)
 
+How uno and satti use it for room checks: `FAKE-PEER.md`.
+
 `nearby-testing` has two fixtures that use only the public API, so the game's real screens run:
 
 - `FakePeer`: a second player on the same phone. It joins the game's own `NearbyHost` on 127.0.0.1, says ready and
@@ -184,14 +186,13 @@ must return legal moves: a refused move gets no new view, so the fake waits unti
    `debugImplementation("com.github.narayan07feb.forgebyte-nearby:nearby-testing:<tag>")`, plus the same line for each
    other build type that carries the game's test tools. Never `implementation`: the store build must not hold it.
    - uno (8 Nov): `lava` and `benchmark` carry its test tools (`src/androidTestTools`), so they may hold it too.
-   - satti (8 Nov): `lava` and `benchmark` are release code, so only `debug` holds it.
+   - satti: `lava` and `benchmark` carry its test scenarios (`src/androidScenario`), so they may hold it too.
 2. **Guard.** Copy `verifyNoNearbyTestingInRelease` from `sample-host/build.gradle.kts`, list the runtime classpath of
-   every build type that must stay free of test code (uno: `releaseRuntimeClasspath`; satti: also
-   `lavaRuntimeClasspath` and `benchmarkRuntimeClasspath`) and hook it to `check`. It fails when `nearby-testing`
-   reaches one of them.
+   every build type that must stay free of test code (uno and satti: `releaseRuntimeClasspath`) and hook it to
+   `check`. It fails when `nearby-testing` reaches one of them.
 3. **Code in the test source set.** Main code cannot see a test-only class. Put the fake in the source set of the
    build types that hold `nearby-testing`, and a no-op with the same name in the others. In a KMP app module these are
-   `src/androidDebug/kotlin`, `src/androidRelease/kotlin` and so on (check the names with a build); uno already has `src/androidTestTools/kotlin`.
+   `src/androidDebug/kotlin`, `src/androidRelease/kotlin` and so on (check the names with a build); uno already has `src/androidTestTools/kotlin`, satti `src/androidScenario/kotlin`.
 
 ```kotlin
 // src/androidDebug/kotlin/.../DebugNearby.kt
