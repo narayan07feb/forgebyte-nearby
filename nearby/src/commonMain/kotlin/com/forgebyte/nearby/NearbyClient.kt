@@ -87,6 +87,9 @@ public class NearbyClient<M, V>(
     @Volatile private var leaving = false
     @Volatile private var lastSeq = 0
 
+    /** This connection has its Welcome. The host takes any later message as proof of that, so none goes out before. */
+    @Volatile private var welcomed = false
+
     private val _status = MutableStateFlow<ClientStatus>(ClientStatus.Connecting)
     public val status: StateFlow<ClientStatus> = _status.asStateFlow()
 
@@ -211,6 +214,7 @@ public class NearbyClient<M, V>(
                         val msg = NearbyProtocol.decodeHost(text) ?: continue
                         if (msg is HostMsg.Welcome) {
                             trace("joiner: welcome, seat ${msg.lobby.yourSeat}")
+                            welcomed = true
                             token = msg.reconnectToken
                             droppedAt = null
                             seatStore.save(SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken))
@@ -225,6 +229,7 @@ public class NearbyClient<M, V>(
                 trace("joiner: attempt failed ${e::class.simpleName}: ${e.message}")
             } finally {
                 link = null
+                welcomed = false
             }
             if (leaving) end = EndReason.Left
             if (end == null) {
@@ -268,8 +273,8 @@ public class NearbyClient<M, V>(
     }
 
     /**
-     * Sending returns false while the connection is down (the message is dropped, never thrown). After the
-     * reconnect the host sends the current view again, so the player can simply try again.
+     * Sending returns false while the connection is down or not yet welcomed (the message is dropped, never thrown).
+     * After the reconnect the host sends the current view again, so the player can simply try again.
      */
     public suspend fun ready(ready: Boolean): Boolean = send(ClientMsg.Ready(ready))
 
@@ -296,6 +301,7 @@ public class NearbyClient<M, V>(
 
     private suspend fun send(msg: ClientMsg): Boolean = sendLock.withLock {
         val l = link ?: return false
+        if (!welcomed && (msg is ClientMsg.Ready || msg is ClientMsg.Move)) return false
         try {
             l.socket.send(Frame.Binary(true, l.secure.seal(NearbyProtocol.encode(msg))))
             true
