@@ -137,6 +137,15 @@ class JoinIdTest {
     }
 
     @Test
+    fun givenKickedRightAfterAReconnect_whenTheHeldTokenComesBack_thenRefused() {
+        startWithA()
+        room.onDisconnect("a")
+        h.hello("a2", token = "tok1")
+        room.kick(1)
+        assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a3", token = "tok1"), "a3"))
+    }
+
+    @Test
     fun givenTokenReconnect_whenTheJoinIdIsUsedAfterwards_thenItIsJustANewJoin() {
         h.hello("a", joinId = "J1")
         room.onDisconnect("a")
