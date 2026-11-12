@@ -4,8 +4,12 @@ import com.appstractive.dnssd.DiscoveredService
 import com.appstractive.dnssd.DiscoveryEvent
 import com.appstractive.dnssd.discoverServices
 import com.appstractive.dnssd.key
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 
 /** The DNS-SD service type every ForgeByte room advertises (Android NSD, iOS Bonjour, JVM JmDNS via dns-sd-kt). */
 public const val SERVICE_TYPE: String = "_forgebyte._tcp"
@@ -35,6 +39,10 @@ public data class RoomAd(
 /**
  * How to reach a room without discovery (QR code or a typed code), for routers and hotspots that block mDNS.
  * [fingerprint] pins the room's encryption key, so a code join cannot be intercepted on the way.
+ *
+ * Anyone who has this full code gets a seat with no host approval and no check code, until the game starts or the room
+ * is full, unless the host set [RoomConfig.approveCodeJoins]. Share it only in person or by QR; the host can kick a seat
+ * it does not know.
  */
 public data class JoinCode(val host: String, val port: Int, val secret: String, val fingerprint: String) {
     override fun toString(): String = "$host:$port:$secret:$fingerprint"
@@ -63,18 +71,31 @@ internal fun roomTxt(gameId: String, config: RoomConfig, freeSeats: Int): Map<St
     Txt.GAME to gameId,
     Txt.PROTOCOL to PROTOCOL_VERSION.toString(),
     Txt.GAME_VERSION to config.gameVersion.toString(),
-    Txt.NAME to config.roomName.take(MAX_ROOM_NAME),
+    Txt.NAME to config.roomName.cutText(MAX_ROOM_NAME),
     Txt.FREE to freeSeats.toString(),
 )
 
 internal const val MAX_ROOM_NAME = 40
 
+/** The mDNS service name: one DNS label, so at most 63 bytes in UTF-8 (RFC 6763 4.1.1); a Hindi room name is longer. */
+internal fun serviceName(config: RoomConfig): String = config.roomName.cutText(MAX_ROOM_NAME, maxUtf8Bytes = 63)
+
 /** Rooms of [gameId] on the local network, updated as they appear, change and go away. */
 public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
     ensureDiscoveryReady()
+    emitAll(discoverServices(SERVICE_TYPE).toRooms(gameId))
+}
+
+/**
+ * The rooms of [gameId] seen in dns-sd [DiscoveryEvent]s; starts with an empty list. The events and this mapping run on
+ * [Dispatchers.IO], never on the collector's thread: on Android below 14, dns-sd-kt looks up each room's host name
+ * (reverse DNS) where the flow runs, and on the main thread that crashed the app (NetworkOnMainThreadException, Mi A3,
+ * Android 11, 7 Nov 2026).
+ */
+internal fun Flow<DiscoveryEvent>.toRooms(gameId: String): Flow<List<RoomAd>> = flow {
     val found = mutableMapOf<String, RoomAd>()
     emit(emptyList())
-    discoverServices(SERVICE_TYPE).collect { event ->
+    collect { event ->
         when (event) {
             is DiscoveryEvent.Discovered -> event.resolve() // addresses arrive with Resolved
             is DiscoveryEvent.Resolved -> {
@@ -87,7 +108,7 @@ public fun discoverRooms(gameId: String): Flow<List<RoomAd>> = flow {
         }
         emit(found.values.toList())
     }
-}
+}.flowOn(Dispatchers.IO)
 
 internal fun DiscoveredService.toRoomAd(gameId: String): RoomAd? {
     fun text(key: String) = txt[key]?.decodeToString()
@@ -110,5 +131,12 @@ internal fun DiscoveredService.toRoomAd(gameId: String): RoomAd? {
 /** Android: throws until NearbyAndroid.init(context) ran. Elsewhere nothing to do. */
 internal expect fun ensureDiscoveryReady()
 
-/** Site-local IPv4 addresses of this device, for the join code. */
+/** Site-local IPv4 addresses of this device, Wi-Fi first ([wifiFirst]), for the join and short codes. */
 internal expect fun localAddresses(): List<String>
+
+/**
+ * Addresses as (interface name, address) pairs, Wi-Fi first: wlan* on Android, en0 on a Mac. Then the rest (a hotspot
+ * the phone hosts, a VPN) in the order given, so a joiner on both picks its Wi-Fi network for a short code.
+ */
+internal fun wifiFirst(addresses: List<Pair<String, String>>): List<String> =
+    addresses.sortedBy { (name, _) -> if (name.startsWith("wlan") || name == "en0") 0 else 1 }.map { it.second }

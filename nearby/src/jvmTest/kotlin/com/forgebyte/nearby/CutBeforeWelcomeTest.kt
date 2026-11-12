@@ -13,11 +13,14 @@ import java.io.InputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -38,14 +41,17 @@ class CutBeforeWelcomeTest {
     }
 
     /**
-     * A loopback relay in front of the host. On its first connection it passes everything to the host, and from the
-     * host only the HTTP upgrade and the key exchange reply; when the host's first encrypted frame (the Welcome)
-     * arrives it cuts both sockets, as if Wi-Fi dropped right then. Later connections pass untouched.
+     * A loopback relay in front of the host. On connection number [cutOn] it passes everything to the host, and from
+     * the host only the HTTP upgrade and the key exchange reply; when the host's first encrypted frame (the Welcome)
+     * arrives it cuts both sockets, as if Wi-Fi dropped right then. With [hold] it keeps that frame back until
+     * [release] instead of cutting. Other connections pass untouched.
      */
-    private class CutRelay(target: Int) {
+    private class CutRelay(target: Int, private val cutOn: Int = 0, private val hold: Boolean = false) {
         private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
         val port: Int = server.localPort
         val connections = AtomicInteger()
+        val held = CountDownLatch(1)
+        val release = CountDownLatch(1)
         private val firstSockets = mutableListOf<Socket>()
 
         /** Cuts the first connection now, as if Wi-Fi dropped (both ends see the socket close). */
@@ -56,7 +62,7 @@ class CutBeforeWelcomeTest {
                 while (true) {
                     val joiner = runCatching { server.accept() }.getOrNull() ?: break
                     val toHost = Socket(InetAddress.getLoopbackAddress(), target)
-                    val first = connections.getAndIncrement() == 0
+                    val first = connections.getAndIncrement() == cutOn
                     if (first) synchronized(firstSockets) { firstSockets += listOf(joiner, toHost) }
                     pump(joiner.getInputStream(), toHost, joiner) // joiner -> host, untouched
                     if (first) cutAtFirstBinary(toHost.getInputStream(), joiner, toHost) else pump(toHost.getInputStream(), joiner, toHost)
@@ -92,7 +98,13 @@ class CutBeforeWelcomeTest {
                     if (len == 126L) { val x = from.readNBytes(2); ext.write(x); len = ((x[0].toInt() and 0xff) shl 8 or (x[1].toInt() and 0xff)).toLong() }
                     if (len == 127L) { val x = from.readNBytes(8); ext.write(x); len = x.fold(0L) { a, v -> (a shl 8) or (v.toLong() and 0xff) } }
                     val payload = from.readNBytes(len.toInt())
-                    if (b0 and 0x0f == 0x2) break // binary: the encrypted Welcome; drop it and cut
+                    if (b0 and 0x0f == 0x2) { // binary: the encrypted Welcome
+                        if (!hold) break // drop it and cut
+                        if (held.count > 0) {
+                            held.countDown()
+                            release.await()
+                        }
+                    }
                     out.write(b0); out.write(b1); out.write(ext.toByteArray()); out.write(payload)
                 }
             }
@@ -146,6 +158,42 @@ class CutBeforeWelcomeTest {
         val status = withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended } }
         assertEquals(ClientStatus.Connected, status, "the approval reached the retried connection (first entry was ${requests.single()})")
         assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name })
+    }
+
+    private fun joiner() = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope)
+
+    private suspend fun NearbyClient<FakeMove, FakeView>.joinAndWait(relay: CutRelay) {
+        join(JoinCode(LOOPBACK, relay.port, Harness.SECRET, host.fingerprint!!), "Asha")
+        assertEquals(ClientStatus.Connected, withTimeoutOrNull(20.seconds) { status.first { it == ClientStatus.Connected } })
+    }
+
+    // Failed before the held token (10 Nov): the second retry was told "Your seat is gone".
+    @Test
+    fun givenReconnect_whenItsWelcomeIsLost_thenTheNextRetryKeepsTheSeat() = runBlocking<Unit> {
+        val relay = CutRelay(host.open(bindHost = LOOPBACK), cutOn = 1)
+        val c = joiner()
+        c.joinAndWait(relay)
+        c.dropForTest()
+        withTimeoutOrNull(20.seconds) { while (relay.connections.get() < 3 || c.status.value != ClientStatus.Connected) kotlinx.coroutines.delay(20) }
+            ?: error("no seat after the lost Welcome: ${c.status.value}, ${relay.connections.get()} connections")
+        c.ready(true)
+        withTimeoutOrNull(10.seconds) { host.canStart.first { it } } ?: error("never startable: ${host.lobby.value}")
+        assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name })
+        host.startGame(seed = 1)
+        withTimeoutOrNull(10.seconds) { c.view.first { it != null } } ?: error("no view after start")
+    }
+
+    @Test
+    fun givenReconnectNotWelcomedYet_whenThePlayerActs_thenNothingIsSentUntilTheWelcome() = runBlocking<Unit> {
+        val relay = CutRelay(host.open(bindHost = LOOPBACK), cutOn = 1, hold = true)
+        val c = joiner()
+        c.joinAndWait(relay)
+        c.dropForTest()
+        withTimeoutOrNull(20.seconds) { while (relay.held.count > 0) kotlinx.coroutines.delay(20) } ?: error("no second Welcome")
+        assertFalse(c.ready(true), "sent before the Welcome")
+        relay.release.countDown()
+        withTimeoutOrNull(20.seconds) { c.status.first { it == ClientStatus.Connected } } ?: error("no Welcome: ${c.status.value}")
+        assertTrue(c.ready(true), "the link is up again")
     }
 
     @Test

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older: keep the saved seat (a reconnect token) out of backups. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="nearby_seat.xml" />
+</full-backup-content>

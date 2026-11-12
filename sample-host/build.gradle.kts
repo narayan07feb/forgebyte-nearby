@@ -15,11 +15,12 @@ android {
         versionCode = 1
         versionName = "0.1"
     }
-    // Release build only to measure the app size the library adds (R8 on, debug key); never uploaded.
+    // Release build only to measure the app size the library adds (R8 on, debug key); never uploaded. No rules of
+    // its own: it builds only on nearby's consumer rules, the same as a game would (check for ceo, 2026-11-07).
     buildTypes {
         release {
             isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -34,17 +35,48 @@ kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarg
 dependencies {
     implementation(project(":demo"))
     implementation(libs.kotlinx.coroutines.android)
+    debugImplementation(project(":nearby-testing")) // here only so verifyNoNearbyTestingInRelease has something to catch
 }
 
-// ceo, 2026-11-03: nothing from nearby may run at app start. Fails if the merged app manifest still registers
-// dns-sd-kt's initializer or appcompat's emoji2 initializer (appcompat is excluded from dns-sd-kt).
-val verifyNoNearbyStartup by tasks.registering {
-    dependsOn("processDebugMainManifest")
-    val manifest = layout.buildDirectory.file("intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml")
+// The fake peer and fake host (nearby-testing) are for debug builds only. Fails if one reaches a release classpath.
+// Games copy this task and list every build type that must stay free of test code (docs/ADAPTERS.md).
+val verifyNoNearbyTestingInRelease by tasks.registering {
+    val classpaths = listOf("releaseRuntimeClasspath").map { configurations.named(it) }
     doLast {
-        val text = manifest.get().asFile.readText()
-        listOf("com.appstractive.dnssd.AppContextInitializer", "androidx.emoji2.text.EmojiCompatInitializer").forEach {
-            check(it !in text) { "$it runs at app start; nearby must stay lazy (see nearby/src/androidMain/AndroidManifest.xml)" }
+        classpaths.forEach { cp ->
+            val found = cp.get().incoming.resolutionResult.allComponents.map { it.id.displayName }.filter { "nearby-testing" in it }
+            check(found.isEmpty()) { "$found is in ${cp.name}; add nearby-testing with debugImplementation only" }
+        }
+    }
+}
+tasks.named("check") { dependsOn(verifyNoNearbyTestingInRelease) }
+
+// ceo, 2026-11-03: nothing from nearby may run at app start. Owner rule, 2026-11-08: no SDK may slow app start-up.
+// Fails if the merged app manifest (debug and release) has any content provider other than androidx.startup's, or
+// any androidx.startup initializer other than ProfileInstallerInitializer (it waits for the first frame, then 5 s).
+// dns-sd-kt's initializer is removed in nearby/src/androidMain/AndroidManifest.xml and runs in NearbyAndroid.init.
+val verifyNoNearbyStartup by tasks.registering {
+    val variants = listOf("debug", "release")
+    dependsOn(variants.map { "process${it.replaceFirstChar(Char::uppercase)}MainManifest" })
+    val manifests = variants.map {
+        layout.buildDirectory.file("intermediates/merged_manifest/$it/process${it.replaceFirstChar(Char::uppercase)}MainManifest/AndroidManifest.xml")
+    }
+    doLast {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val startup = "androidx.startup.InitializationProvider"
+        fun org.w3c.dom.NodeList.elements() = (0 until length).map { item(it) as org.w3c.dom.Element }
+        manifests.map { it.get().asFile }.forEach { file ->
+            val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+                .newDocumentBuilder().parse(file)
+            val providers = doc.getElementsByTagName("provider").elements()
+            val names = providers.map { it.getAttributeNS(ns, "name") }
+            check(names.all { it == startup }) { "${names - startup} auto-start at app start (${file.path})" }
+            val initializers = providers.flatMap { p ->
+                p.getElementsByTagName("meta-data").elements().filter { it.getAttributeNS(ns, "value") == "androidx.startup" }
+                    .map { it.getAttributeNS(ns, "name") }
+            }
+            val extra = initializers - "androidx.profileinstaller.ProfileInstallerInitializer"
+            check(extra.isEmpty()) { "$extra run at app start; init after the first frame instead (${file.path})" }
         }
     }
 }

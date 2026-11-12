@@ -11,6 +11,7 @@ import dev.whyoleg.cryptography.algorithms.SHA256
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlin.concurrent.Volatile
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -40,6 +41,16 @@ internal var traceRecorder: ((String) -> Unit)? = null
 internal fun trace(line: String) {
     traceSink?.invoke(line)
     traceRecorder?.invoke(line)
+    NearbyTrace.sink?.invoke(line)
+}
+
+/**
+ * Opt-in debug lines: connects, key exchange results, drops, retries, leave timing and bot stops. They hold no keys,
+ * room codes, check codes, player names, moves or views. Off (null) by default; set it in a debug build only, for
+ * example `NearbyTrace.sink = { Log.d("NearbyTrace", it) }`, to see on a phone why a join hung or dropped.
+ */
+public object NearbyTrace {
+    @Volatile public var sink: ((String) -> Unit)? = null
 }
 
 /** Bump when the key exchange or frame format changes. */

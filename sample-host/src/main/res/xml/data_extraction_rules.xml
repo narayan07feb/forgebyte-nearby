@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+: the saved seat (a reconnect token, a seat secret) never goes to a cloud backup or a new phone. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="nearby_seat.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="nearby_seat.xml" />
+    </device-transfer>
+</data-extraction-rules>

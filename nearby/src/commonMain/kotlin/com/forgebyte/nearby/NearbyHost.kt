@@ -15,7 +15,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -57,6 +56,7 @@ public class NearbyHost<S, M, V>(
     private var nextConn = 0
     private val jobs = mutableListOf<Job>()
     private var stopServer: (suspend () -> Unit)? = null
+    private val wake = Channel<Unit>(Channel.CONFLATED) // tells the ticker to read the room's next wake time again
     internal var randomBytes: (Int) -> ByteArray = ::secureRandomBytes // replaced only by tests
     internal var newWifiLock: () -> WifiLatencyLock = ::newWifiLatencyLock // replaced only by tests
 
@@ -102,12 +102,14 @@ public class NearbyHost<S, M, V>(
         }
         server.startSuspend(wait = false)
         stopServer = { server.stopSuspend(500, 1_000) }
-        // Wake exactly when the room next has something due (a paced bot move, a turn deadline), at least every second.
+        // Wake exactly when the room next has something due (a paced bot move, a turn deadline), at least every second,
+        // and early when a room call moved that time sooner (a move with botDelayMs under a second).
         jobs += scope.launch {
             while (isActive) {
                 val wait = lock.withLock { room.nextWakeAt?.minus(now()) } ?: 1_000
-                delay(wait.coerceIn(5, 1_000))
+                withTimeoutOrNull(wait.coerceIn(5, 1_000)) { wake.receive() }
                 act { tick() }
+                wake.tryReceive() // this tick's own signal; the next wait is read fresh under the lock
             }
         }
         jobs += scope.launch { holdWifiDuringMatch(lobby.map { it.phase }, newWifiLock) }
@@ -121,6 +123,12 @@ public class NearbyHost<S, M, V>(
     }
 
     /**
+     * Six-character codes ([ShortCode]) a joiner types to find this room on the same Wi-Fi, one per local address.
+     * A short-code join is a join request: it waits in [joinRequests] for [acceptJoin], like a room found nearby.
+     */
+    public fun shortCodes(port: Int): List<ShortCode> = localAddresses().mapNotNull { ShortCode.of(it, port) }
+
+    /**
      * Advertises the room on the local network until the calling coroutine is cancelled, updating the free-seat
      * count as it changes. A joiner who taps it sends a join request; see [joinRequests].
      */
@@ -128,7 +136,7 @@ public class NearbyHost<S, M, V>(
         ensureDiscoveryReady()
         lobby.map { if (it.phase == Phase.LOBBY) config.maxSeats - it.seats.size else 0 }.distinctUntilChanged()
             .collectLatest { free ->
-                publishService(SERVICE_TYPE, config.roomName.take(MAX_ROOM_NAME)) {
+                publishService(SERVICE_TYPE, serviceName(config)) {
                     this.port = port
                     txt = roomTxt(game.gameId, config, free)
                 }
@@ -229,6 +237,7 @@ public class NearbyHost<S, M, V>(
         }
         _canStart.value = room.canStart
         _joinRequests.value = room.joinRequests
+        wake.trySend(Unit)
     }
 
     private fun showOnHost(msg: HostMsg) {

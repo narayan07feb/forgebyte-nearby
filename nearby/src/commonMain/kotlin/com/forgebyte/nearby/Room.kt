@@ -4,9 +4,18 @@ package com.forgebyte.nearby
 public const val HOST_CONN: String = "host"
 
 public class RoomConfig(
+    /**
+     * The room's label in the discovery advert. It goes unencrypted to every device on the local network: never put
+     * a player name here; use a neutral label such as the game name and a short random word.
+     */
     public val roomName: String,
     public val hostName: String,
     public val gameVersion: Int,
+    /**
+     * The secret in the full join code ([JoinCode], QR or typed). Anyone who has the full code gets a seat with no host
+     * approval and no check code, until the game starts or the room is full, unless [approveCodeJoins] is true. Make it
+     * with a secure random source, and share the code only in person or by QR.
+     */
     public val roomSecret: String,
     public val maxSeats: Int,
     public val minSeats: Int = 2,
@@ -22,6 +31,16 @@ public class RoomConfig(
      * the host, like the online games' turn timer (owner, 2026-11-03). 0: no timer.
      */
     public val turnTimeoutMs: Long = 30_000,
+    /**
+     * When true, a joiner who has the full join code (QR or typed, [roomSecret] included) also waits for the host: the
+     * join goes to [NearbyHost.joinRequests] with its check code, like a room found nearby, and the host accepts or
+     * declines it. A wrong code is still refused at once, and the code still pins the room's key.
+     *
+     * When false (the default), the full code seats the joiner straight away, with no host step, until the game starts
+     * or the room is full. Use true when the code may travel beyond the table (a photo of the QR, a forwarded message).
+     * Short codes ([ShortCode]) and rooms found nearby always wait for the host, whatever this is.
+     */
+    public val approveCodeJoins: Boolean = false,
 ) {
     init {
         require(minSeats in 1..maxSeats) { "need 1 <= minSeats <= maxSeats" }
@@ -48,8 +67,9 @@ public sealed interface RoomOutput {
  * Seat 0 is the host. In the lobby a seat that leaves, is kicked or stays dropped past the reconnect window is
  * removed; once the game started, a host bot takes that seat over so the game can go on.
  *
- * Three ways in: a hello with the room code (QR or typed) takes a seat at once; a hello with a reconnect token
- * takes back that seat; a hello with neither is a join request (name only) that waits for the host's answer.
+ * Three ways in: a hello with the room code (QR or typed) takes a seat at once (or waits for the host, with
+ * [RoomConfig.approveCodeJoins]); a hello with a reconnect token takes back that seat; a hello with neither is a join
+ * request (name only) that waits for the host's answer.
  */
 public class Room<S, M, V>(
     private val game: NearbyGame<S, M, V>,
@@ -67,6 +87,8 @@ public class Room<S, M, V>(
         var takenOver = false
         /** The joiner's join id, so a retry that never got its Welcome finds this seat again. */
         var joinId: String? = null
+        /** The token the joiner came back with. Its Welcome can be lost, so this stays good until the joiner speaks. */
+        var heldToken: String? = null
     }
 
     private class Pending(val id: Int, var conn: String, val name: String, val at: Long, var checkCode: String, val joinId: String?)
@@ -114,8 +136,8 @@ public class Room<S, M, V>(
 
     public fun onMessage(conn: String, msg: ClientMsg): List<RoomOutput> = step {
         val seat = seatOf(conn)
-        // Any message after the Hello proves this connection got its Welcome: the join id is no longer needed.
-        if (seat != null && msg !is ClientMsg.Hello) seats[seat].joinId = null
+        // Any message after the Hello proves this connection got its Welcome: the older credentials are no longer needed.
+        if (seat != null && msg !is ClientMsg.Hello) seats[seat].apply { joinId = null; heldToken = null }
         when {
             msg is ClientMsg.Hello -> if (seat == null && pending.none { it.conn == conn }) hello(conn, msg)
             seat == null -> Unit // nothing but hello before a seat is given
@@ -215,9 +237,10 @@ public class Room<S, M, V>(
         if (refusal != null) return refuse(conn, refusal.first, refusal.second)
 
         if (h.reconnectToken != null) {
-            val seat = seats.indexOfFirst { t -> t.token?.let { sameSecret(it, h.reconnectToken) } == true }
+            val seat = seats.indexOfFirst { t -> listOfNotNull(t.token, t.heldToken).any { sameSecret(it, h.reconnectToken) } }
             if (seat < 0) return refuse(conn, RefuseReason.RECONNECT_EXPIRED, "Your seat is gone. Join again.")
             seats[seat].joinId = null // a token means the Welcome arrived
+            seats[seat].heldToken = h.reconnectToken
             return reseat(seat, conn)
         }
         if (h.joinId != null) {
@@ -228,16 +251,18 @@ public class Room<S, M, V>(
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = checkCodeOf(conn)
+                if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
             }
         }
         if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
         if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
-        if (h.roomSecret == null) {
+        if (h.roomSecret == null || config.approveCodeJoins) { // the secret, if any, was checked above
             if (pending.size >= config.maxPendingRequests) {
                 return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
             }
             pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn), h.joinId)
+            if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
             return
         }
         seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn).apply { joinId = h.joinId }
@@ -277,7 +302,7 @@ public class Room<S, M, V>(
         out += RoomOutput.Close(conn)
     }
 
-    /** A fresh token on every welcome, so an old one cannot be replayed. */
+    /** A fresh token on every welcome, so an old one stops working as soon as the joiner shows it got the new one. */
     private fun welcome(seat: Int) {
         val token = newToken()
         seats[seat].token = token
@@ -320,11 +345,17 @@ public class Room<S, M, V>(
 
     /**
      * Lobby: the seat goes away. In a game: a bot plays it from now on; after a drop past the reconnect window
-     * ([keepToken]) the player can still come back with their token and take it over again.
+     * ([keepToken]) the player can still come back with their token and take it over again. After the game
+     * ([Phase.OVER]): the seat keeps its kind and name, so the result still shows the player; only the connection goes.
      */
     private fun drop(seat: Int, keepToken: Boolean = false) {
         if (phase == Phase.LOBBY) {
             seats.removeAt(seat)
+            broadcastLobby()
+            return
+        }
+        if (phase == Phase.OVER) {
+            seats[seat].apply { conn = null; droppedAt = null }
             broadcastLobby()
             return
         }
@@ -333,6 +364,7 @@ public class Room<S, M, V>(
             takenOver = keepToken
             if (!keepToken) {
                 token = null
+                heldToken = null
                 joinId = null
             }
             conn = null
@@ -480,7 +512,7 @@ public class Room<S, M, V>(
         const val TOO_LATE = "Too late, another player already did that."
 
         fun cleanName(raw: String, seat: Int) =
-            raw.filter { !it.isISOControl() }.trim().take(MAX_NAME).ifBlank { "Player ${seat + 1}" }
+            raw.filter { !it.isISOControl() }.trim().cutText(MAX_NAME).ifBlank { "Player ${seat + 1}" }
 
         /** Compares in time that does not depend on where the strings differ. */
         fun sameSecret(a: String, b: String): Boolean {

@@ -211,6 +211,13 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 | Week 2 | nearby | Bot pacing + turn timer (owner, 3 Nov), tag `0.3.0` (wire-compatible with 0.2.0) |
 | Week 2 | nearby | Battery/heat check, Wi-Fi low-latency lock for slow moves, second real phone (test 4c) |
 | Week 3 | nearby + games | iOS (Bonjour, Local network permission), Data safety, closed-test release |
+| Week 2 (7 Nov) | nearby | Seat back after a kill: `SeatStore` + `NearbyClient.resume` (ceo, 7 Nov); no rematch in a room, games open a new room to play again |
+
+**Parked**
+
+- In-app hotspot ("Make a network", `docs/LOCAL-HOTSPOT.md`, draft PR #36): parked by the owner, 7 Nov. A phone
+  hotspot is the same as any shared network, and nearby play already works when a player turns on a hotspot in
+  Settings. No more work on it. Games show the help text instead (`docs/ADAPTERS.md`, "No Wi-Fi?").
 
 ## How we test
 
@@ -225,7 +232,8 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 4. **Real devices**:
    - Lava as host + Android emulator as joiner on the same Wi-Fi (emulator only with the owner's yes for that run).
    - Lava as host + Mac JVM test client joining over Wi-Fi (no second phone needed).
-   - Lava hotspot + a second real phone (owner's or borrowed: we have one test phone).
+   - A phone hotspot turned on in Settings + a second real phone joining it: an OWNER test (a settings change, so
+     the owner taps it; sessions do not run it).
    Each run: room shows up in the list, QR join works, full match to the end, Wi-Fi off/on mid-game (reconnect),
    host leaves, move round-trip time (target under 150 ms on Wi-Fi).
 5. **Before release**: usual Lava checks (no crash/ANR in the buffer, 20-minute session battery and temperature),
@@ -282,6 +290,17 @@ hands back a bot seat that was not taken over (ceo's security review). A player 
 join-id retry can only happen in the lobby. `CutBeforeWelcomeTest` (3) and `JoinIdTest` (13) cover code joins,
 requests accepted or still waiting, a token beating a join id, and a kicked or departed player refused both ways.
 One earlier failure ("a joiner got no view after start", run 12) had no trace and stays **UNEXPLAINED**.
+
+**Lost Welcome on a reconnect (evidence, 2026-11-10).** `SocketOrderTest` plays every order of the socket events around
+one joiner on the real `Room` (4,112 orders with two cut sockets). It found a player losing their seat: the host swaps
+the token on every Welcome, so when a reconnect's Welcome died with its socket, the next retry carried the old token
+and got "Your seat is gone". Fixed: the host also takes the token the joiner came back with, until that joiner sends
+anything on the new socket. The joiner now sends no Ready or Move before its Welcome, so a message really proves the
+Welcome arrived. A kicked or departed player still cannot come back with it. What is left: a joiner who stays silent after a reconnect
+keeps its previous token valid until it next speaks; tokens only travel inside encrypted frames. No order of these
+events left a joiner without a view after start, so run 12 is not an ordering fault in `Room` with one joiner and up to
+two cut sockets; the transport and timing side is not covered and run 12 stays **UNEXPLAINED** (the Mac was heavily
+loaded that day).
 
 **2026-11-04 00:08 to 00:11, night run: MINIFIED (R8) `sample-host` release on the Lava (Android 16), Mac joiner,
 same Wi-Fi.** Code: main 29049bb (v0.3.2) plus the #11 test tools; APK 975,603 bytes.
