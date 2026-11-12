@@ -361,7 +361,30 @@ class RoomTest {
         assertEquals("Asha", welcome.lobby.seats[1].name)
         assertTrue(welcome.lobby.seats[1].connected)
         assertEquals("tok3", welcome.reconnectToken)
+        room.onMessage("a2", ClientMsg.Ready(true)) // the joiner speaks, so it got the new token
         assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a3", token = token), "a3"), "old token is dead")
+    }
+
+    @Test
+    fun givenReconnectWhoseWelcomeWasLost_whenRetryWithTheSameToken_thenSameSeatAgain() {
+        val token = h.hello("a", name = "Asha").welcome("a").reconnectToken
+        room.onDisconnect("a")
+        h.hello("a2", token = token) // its Welcome dies with the socket
+        room.onDisconnect("a2")
+        val welcome = h.hello("a3", token = token).welcome("a3")
+        assertEquals(1, welcome.lobby.yourSeat)
+        assertEquals(listOf("Host", "Asha"), room.hostLobby.seats.map { it.name })
+    }
+
+    @Test
+    fun givenRetryWithTheNewestToken_whenTheOlderTokenComesLater_thenRefused() {
+        val first = h.hello("a", name = "Asha").welcome("a").reconnectToken
+        room.onDisconnect("a")
+        val second = h.hello("a2", token = first).welcome("a2").reconnectToken
+        room.onDisconnect("a2")
+        h.hello("a3", token = second) // the joiner did read the new token
+        room.onDisconnect("a3")
+        assertEquals(RefuseReason.RECONNECT_EXPIRED, refusal(h.hello("a4", token = first), "a4"))
     }
 
     @Test
