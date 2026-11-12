@@ -196,7 +196,8 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 - **Residual risk, Android:** if a future Android makes `NEARBY_WIFI_DEVICES` required for local network discovery,
   NSD stops finding rooms until the games declare and request it (the join code still works).
 - iOS (week 3): `NSLocalNetworkUsageDescription` + `NSBonjourServices` in Info.plist.
-- Play Data safety: no new data leaves the phone (local network only); re-check before release. Satti: Families
+- Play Data safety: no new data leaves the phone (local network only); re-check before release. Facts and suggested
+  answers: `docs/DATA-SAFETY.md`. Satti: Families
   check (no data sent to other players beyond the display name typed in the room).
 
 ## Order of work
