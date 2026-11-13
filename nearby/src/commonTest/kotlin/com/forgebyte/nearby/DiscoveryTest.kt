@@ -45,6 +45,36 @@ class DiscoveryTest {
         assertNull(service(txt, addresses = listOf("[fe80:0:0:0:3436:88ff:fe7a:3451]")).toRoomAd("fake"), "IPv6 only")
     }
 
+    @Test
+    fun givenHostAddresses_whenTxtBuilt_thenIpv4OnlyAtMostThree() {
+        val txt = roomTxt("fake", config, 3, listOf("192.168.29.15", "fe80::1%wlan0", "10.0.0.2", "x.y", "172.16.0.9", "192.168.43.1"))
+        assertEquals("192.168.29.15,10.0.0.2,172.16.0.9", txt["a"])
+        assertNull(roomTxt("fake", config, 3, listOf("fe80::1")).get("a"), "no IPv4: no key")
+    }
+
+    // Two Android 9-13 hosts on one Wi-Fi both answer to "Android.local" (Mi TV, 7 Nov 2026): the resolver can hand the
+    // joiner the other device's address for this room.
+    private val mine = listOf("192.168.29.40")
+    private val wrong = listOf("192.168.29.21")
+
+    @Test
+    fun givenTwoHostsNamedAndroidLocal_whenResolverGivesTheOtherOne_thenTheHostsOwnAddressWins() {
+        val oldHost = service(roomTxt("fake", config, 2), wrong, host = "Android.local")
+        assertEquals("192.168.29.21", oldHost.toRoomAd("fake", mine)!!.host, "a host without the key: the resolver's pick")
+        val newHost = service(roomTxt("fake", config, 2, listOf("192.168.29.15")), wrong, host = "Android.local")
+        assertEquals("192.168.29.15", newHost.toRoomAd("fake", mine)!!.host)
+    }
+
+    @Test
+    fun givenListedAddresses_whenRead_thenMyNetworkThenResolvedIfListedThenFirstListed() {
+        val txt = roomTxt("fake", config, 2, listOf("10.0.0.2", "192.168.29.15"))
+        assertEquals("192.168.29.15", service(txt, listOf("10.0.0.2")).toRoomAd("fake", mine)!!.host, "my network first")
+        assertEquals("10.0.0.2", service(txt, listOf("10.0.0.2")).toRoomAd("fake", listOf("172.16.0.1"))!!.host, "resolved and listed")
+        assertEquals("10.0.0.2", service(txt, wrong).toRoomAd("fake", emptyList())!!.host, "resolved not listed: first listed")
+        assertEquals("10.0.0.2", service(txt, emptyList()).toRoomAd("fake", emptyList())!!.host, "nothing resolved yet")
+        assertEquals("192.168.29.21", service(roomTxt("fake", config, 2) + ("a" to "999.1.1.1,x"), wrong).toRoomAd("fake", mine)!!.host, "junk ignored")
+    }
+
     // Event order as NSD sends it (night run 2026-11-04: the first try found nothing; the logs were gone)
 
     private val txt = roomTxt("fake", config, 3)

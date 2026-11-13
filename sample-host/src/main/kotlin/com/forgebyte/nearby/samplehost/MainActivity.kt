@@ -58,7 +58,8 @@ class MainActivity : Activity() {
         NearbyAndroid.init(this) // nearby play opens here; nothing ran at app start
         // `--es join <code>`, `--es short <XXX-XXX>` or `--ez find true`: play as a joiner (by the full code, by the short
         // code the host shows, or the first room found nearby) instead of hosting; `--ei think <ms>` waits before each own
-        // move (default 700); `--es name <text>` is this phone's player name (default the phone model).
+        // move (default 700); `--es name <text>` is this phone's player name (default the phone model); with find,
+        // `--es findRoom <name>` joins only the room of that name (it logs every room it sees, with its address).
         // Host only: `--es room <text>` room name, `--ei seats <n>` (default 4), `--ei turn <ms>` turn timer (0: off;
         // default the library's), `--ez hold true` waits in the lobby until `--ez start true`, `--ez approveCode true`
         // makes full-code joins wait for the host too (RoomConfig.approveCodeJoins), `--ez decline true` declines every
@@ -67,16 +68,17 @@ class MainActivity : Activity() {
         val name = intent.getStringExtra("name")
         val joinCode = intent.getStringExtra("join")
         val shortText = intent.getStringExtra("short")
+        val findRoom = intent.getStringExtra("findRoom")
         // `--ez resume true`: take back the seat saved before this app was killed (kept in private storage, out of
         // backups and device transfer: see res/xml).
         val resume = intent.getBooleanExtra("resume", false)
-        if (joinCode != null || shortText != null || resume || intent.getBooleanExtra("find", false)) {
+        if (joinCode != null || shortText != null || findRoom != null || resume || intent.getBooleanExtra("find", false)) {
             val parsed = joinCode?.let(JoinCode::parse)
             val short = shortText?.let(ShortCode::parse)
             scope.launch {
                 if (joinCode != null && parsed == null) return@launch say("FAIL bad join code $joinCode")
                 if (shortText != null && short == null) return@launch say("FAIL bad short code $shortText")
-                val ok = playAsJoiner(parsed, name ?: Build.MODEL, intent.getIntExtra("think", 700).toLong(), short,
+                val ok = playAsJoiner(parsed, name ?: Build.MODEL, intent.getIntExtra("think", 700).toLong(), short, findRoom,
                     seatStore = PrefsSeatStore(this@MainActivity), resume = resume, onClient = { c ->
                     client = c
                     launch { combine(c.lobby, c.seqView, c.status) { l, sv, st -> show(l, sv?.view, "JOINER  $st") }.collect {} }
