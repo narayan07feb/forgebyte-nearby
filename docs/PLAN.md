@@ -340,6 +340,16 @@ bot seat: host seat 0, bot seat 1, Lava seat 2.
 - No crash lines on either device. Home on both; uninstalled from the Lava (the TV copy was removed at about 07:07,
   owner rule: uninstall from the TV after each test); Lava Wi-Fi on; lock freed.
 
+**2026-11-13 09:21 to 09:24, host Wi-Fi drop during a reconnect: Lava (Android 16) hosts, Mac joins, same Wi-Fi.**
+Build: main 2ccf643, `sample-host` release (2 seats), `mac-client` with a 6 s think. Wi-Fi off only over the Lava's
+USB adb serial.
+- Each run: the match starts, the Lava's Wi-Fi goes off for 8 s, and goes off again for 8 s as soon as its address is
+  back, before the Mac has reconnected. The Mac showed Reconnecting once, then Connected, kept its seat (PLAYER) and
+  the match ended: 3 of 3 PASS.
+- The Lava got the same address back (192.168.0.108) after all 6 drops.
+- No crash or ANR lines; volume 0; sample uninstalled (pm list 0); Play apps unchanged; lock freed.
+- Mi A3 half: UNVERIFIED, owed. It needs the Mi A3 on USB, since Wi-Fi off is never sent over a Wi-Fi adb link.
+
 ## Rules for this repo
 
 - No GitHub Actions; tests run locally (`./gradlew allTests` or the ci-local lane).
