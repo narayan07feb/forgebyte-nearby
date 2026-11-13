@@ -4,7 +4,7 @@ plugins {
 }
 
 // Joins a demo room from the Mac (PLAN device test 4b): finds it with JmDNS or uses a join code, plays the seat,
-// and prints move round-trip times. Run: ./gradlew :mac-client:run --args="[--code host:port:code] [--name Mac]"
+// and prints move round-trip times. Run: ./gradlew :mac-client:run --args="[--code host:port:code] [--name Mac] [--think ms] [--trace]"
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11) } }
 java {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -13,4 +13,7 @@ java {
 
 application { mainClass.set("com.forgebyte.nearby.macclient.MainKt") }
 
-dependencies { implementation(project(":demo")) }
+dependencies {
+    implementation(project(":demo"))
+    testImplementation(libs.kotlin.test)
+}
