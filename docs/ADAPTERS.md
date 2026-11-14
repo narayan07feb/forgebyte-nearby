@@ -61,6 +61,18 @@ The phone with the hotspot can host or join. A match on a hotspot is an owner te
   connection and then hangs. After `Reconnecting`, `Ended(Unreachable)` means the host is gone: show "The host left.
   Back to the menu." with one button to the menu, not a retry spinner.
 
+## Long Wi-Fi drops (measured 2026-11-14)
+
+- The host keeps a dropped seat for `RoomConfig.reconnectWindowMs` (default 60 s). In a game, after that a bot plays
+  the seat; in the lobby the seat is freed. The turn timer keeps playing for a dropped seat inside the window.
+- The joiner keeps trying for about 2 minutes. When it gets through, the host gives the seat back to the player, also
+  after a bot took it over, and also after the match is over (the result shows the player again).
+- What we measured (PLAN device log, 2026-11-14): with the host phone's Wi-Fi off 8 s twice, the joiner was back
+  about 1 s after the host had its address again. In 2 of 13 runs on the Mi A3 the host could not be reached for more
+  than 60 s, so the bot played that seat until the player was back.
+- So in a game: show the dropped player's seat as "Bot playing until they are back", not as gone, and keep the
+  joiner on its `Reconnecting` screen. A game that wants fewer bot takeovers can raise `reconnectWindowMs`.
+
 ## Play again
 
 There is no rematch in a room: after `Phase.OVER` the room is done. To play again, the host opens a new room and the
