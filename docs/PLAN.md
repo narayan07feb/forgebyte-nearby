@@ -348,7 +348,23 @@ USB adb serial.
   the match ended: 3 of 3 PASS.
 - The Lava got the same address back (192.168.0.108) after all 6 drops.
 - No crash or ANR lines; volume 0; sample uninstalled (pm list 0); Play apps unchanged; lock freed.
-- Mi A3 half: UNVERIFIED, owed. It needs the Mi A3 on USB, since Wi-Fi off is never sent over a Wi-Fi adb link.
+- Mi A3 half: run on 2026-11-14 (below).
+
+**2026-11-14 00:32 to 03:28, the same check with the Mi A3 (Android 11) as host, Mac joins, same Wi-Fi.**
+Build: main 2ccf643 `sample-host`; `mac-client` with a 6 s think, and from 02:47 with `--trace` (#53), so each Mac
+line has the clock and the retry lines. Wi-Fi off only over the Mi A3's USB adb serial. Three slots: 00:32 (3 runs),
+02:47 (5 runs), 03:20 (5 runs).
+- 11 of 13 PASS: the Mac showed Reconnecting once, then Connected, kept its seat (PLAYER) and the match ended. In the
+  03:20 slot the address was back in 13 to 15 s and the Mac was back about 1 s later in every run.
+- 2 FAIL (00:32 run 3, 02:47 run 5): outages longer than the 60 s reconnect window. In the traced one, the first drop
+  needed 33 s for the address (about 13 s in other runs), and then every Mac connect to the phone timed out for about
+  52 s although the phone had its address again. The host gave the seat to a bot, as designed. Cause UNVERIFIED
+  (network path; nothing in the app logs).
+- The 02:47 run 5 first read as PASS, because the kit checked only the last lobby line, after the Mac got back. The
+  kit now fails a run on any bot seat line; the other passes here and the Lava 3/3 have none.
+- The Mi A3 got the same address back (192.168.0.106) after every drop.
+- No crash or ANR lines; volume 0; sample uninstalled (pm list 0); Play apps unchanged; lock handed on.
+- Result: PASS on both phones (Lava 3/3, Mi A3 11/13), with the two outages above noted.
 
 ## Rules for this repo
 
