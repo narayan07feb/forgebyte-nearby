@@ -27,12 +27,9 @@ Docs: `docs/ADAPTERS.md` (how a game uses the library), `docs/FAKE-PEER.md`, `do
 1. **Device round: two phones and the Mac in one room.** One phone hosts a 3-seat room, the other phone and the Mac
    join, the host swaps each run, the phone joins by discovery and then by short code. No code change. Waits for a
    slot with the Lava on the network.
-2. **Wi-Fi low-latency lock on the host during a match** (Order of work, week 2). Slow moves (203 ms and 347 ms on
-   2026-11-03; p50 138 ms in the 2026-11-05 battery run) look like Wi-Fi power save on the phone. Code without a
-   phone, then an A/B phone run (with and without the lock). Waits for ceo's yes.
-3. **Discovery when two Android 9 to 13 hosts share the name `Android.local`** (draft PR #38: the host lists its
+2. **Discovery when two Android 9 to 13 hosts share the name `Android.local`** (draft PR #38: the host lists its
    IPv4 in the TXT record). Waits for a device slot with two such hosts.
-4. **Causes still UNEXPLAINED or UNVERIFIED** (see the Device test log in `docs/PLAN.md`):
+3. **Causes still UNEXPLAINED or UNVERIFIED** (see the Device test log in `docs/PLAN.md`):
    - run 12: a joiner got no view after the start (no trace);
    - the 267 s leave (now bounded to 10 s);
    - the Mi A3 drops where every Mac connect timed out for about 52 s after the phone had its address back.
@@ -43,4 +40,7 @@ Docs: `docs/ADAPTERS.md` (how a game uses the library), `docs/FAKE-PEER.md`, `do
   production.
 - **In-app hotspot** ("Make a network"): draft PR #36, parked by the owner on 2026-11-07. Games show the "No Wi-Fi?"
   help text from `docs/ADAPTERS.md` instead.
+- **Wi-Fi low-latency lock on the host during a match**: draft PR #26, closed 2026-11-12. The 2026-11-07 A/B phone
+  run showed no clear gain (p50 125 ms with the lock against 134 ms without, p95 344 against 398, with a much wider
+  spread), so ceo decided it does not merge. Do not start it again without new slow-move evidence and ceo's yes.
 - **Sony TV device tests**: the owner said on 2026-11-14 not to use the TV for now.
