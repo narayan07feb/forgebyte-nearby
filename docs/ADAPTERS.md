@@ -1,6 +1,6 @@
 # Writing a game adapter (NearbyGame)
 
-For the uno and satti sessions. Library: `com.github.narayan07feb.forgebyte-nearby:nearby` (ship only on v0.2.0 or
+For the ForgeByte card games. Library: `com.github.narayan07feb.forgebyte-nearby:nearby` (ship only on v0.2.0 or
 later; setup below). The host phone is the referee: it keeps the full state, applies every move and sends each seat
 only `viewFor(state, seat)`.
 
@@ -127,7 +127,7 @@ every change still happens, just without motion.
    false`, animate only its colour and alpha, 180 ms (`animateColorAsState(target, exit(reduce))`). A new player's
    name can scale from 0.96 to 1 with `enter`; never from 0.
 
-**One rule from uno's frame trace: no infinite pulse that redraws the whole screen.** A waiting dot or a
+**One rule from a card game's frame trace: no infinite pulse that redraws the whole screen.** A waiting dot or a
 "Reconnecting" pulse is fine only in its own small layer: read the animated value inside `Modifier.graphicsLayer { }`
 (or `drawBehind { }`), not in the composable body, so each frame redraws that one layer and recomposes nothing:
 
@@ -178,11 +178,11 @@ library, not answers for the form:
 - Players see each other's display names. Names, moves and views are encrypted end to end between the phones. The
   discovery advert goes in clear text to the local network: game id, game and protocol version, room name and free
   seats.
-- Satti (Families): no data goes to other players beyond the display name typed in the room (and the moves).
+- A game in Play's Families program: no data goes to other players beyond the display name typed in the room (and the moves).
 
 ## A test player on one phone (nearby-testing, debug builds only)
 
-How uno and satti use it for room checks: `FAKE-PEER.md`.
+How the card games use it for room checks: `FAKE-PEER.md`.
 
 `nearby-testing` has two fixtures that use only the public API, so the game's real screens run:
 
@@ -197,21 +197,20 @@ must return legal moves: a refused move gets no new view, so the fake waits unti
 1. **Dependency, test builds only.** In the app module:
    `debugImplementation("com.github.narayan07feb.forgebyte-nearby:nearby-testing:<tag>")`, plus the same line for each
    other build type that carries the game's test tools. Never `implementation`: the store build must not hold it.
-   - uno (8 Nov): `lava` and `benchmark` carry its test tools (`src/androidTestTools`), so they may hold it too.
-   - satti: `lava` and `benchmark` carry its test scenarios (`src/androidScenario`), so they may hold it too.
+   - For example, `lava` and `benchmark` build types that carry the game's test tools may hold it too.
 2. **Guard.** Copy `verifyNoNearbyTestingInRelease` from `sample-host/build.gradle.kts`, list the runtime classpath of
-   every build type that must stay free of test code (uno and satti: `releaseRuntimeClasspath`) and hook it to
+   every build type that must stay free of test code (the card games: `releaseRuntimeClasspath`) and hook it to
    `check`. It fails when `nearby-testing` reaches one of them.
 3. **Code in the test source set.** Main code cannot see a test-only class. Put the fake in the source set of the
    build types that hold `nearby-testing`, and a no-op with the same name in the others. In a KMP app module these are
-   `src/androidDebug/kotlin`, `src/androidRelease/kotlin` and so on (check the names with a build); uno already has `src/androidTestTools/kotlin`, satti `src/androidScenario/kotlin`.
+   `src/androidDebug/kotlin`, `src/androidRelease/kotlin` and so on (check the names with a build); a game may already have one, e.g. `src/androidTestTools/kotlin`.
 
 ```kotlin
 // src/androidDebug/kotlin/.../DebugNearby.kt
 object DebugNearby {
     /** Adds a scripted second player to the room this phone hosts. */
-    fun addPeer(host: NearbyHost<*, SattiMove, SattiSeatView>, port: Int, scope: CoroutineScope) {
-        FakePeer(SattiNearbyGame.ID, SattiNearbyGame.VERSION, SattiMove.serializer(), SattiSeatView.serializer(), scope,
+    fun addPeer(host: NearbyHost<*, MyMove, MySeatView>, port: Int, scope: CoroutineScope) {
+        FakePeer(MyNearbyGame.ID, MyNearbyGame.VERSION, MyMove.serializer(), MySeatView.serializer(), scope,
             name = "Test player") { view -> if (view.isMyTurn) view.legalMoves.firstOrNull() else null }
             .join(host, port)
     }
@@ -219,26 +218,26 @@ object DebugNearby {
 
 // src/androidRelease/kotlin/.../DebugNearby.kt (and each other store-like build type): same shape, does nothing
 object DebugNearby {
-    fun addPeer(host: NearbyHost<*, SattiMove, SattiSeatView>, port: Int, scope: CoroutineScope) = Unit
+    fun addPeer(host: NearbyHost<*, MyMove, MySeatView>, port: Int, scope: CoroutineScope) = Unit
 }
 ```
 
 Call `DebugNearby.addPeer(host, port, scope)` after `host.open()`, from a button that only debug builds show
 (`BuildConfig.DEBUG`). The names in the script (`isMyTurn`, `legalMoves`, `ID`) stand for the game's own.
 
-## Satti: fit check (read-only, 2026-11-03, satti main)
+## Fit check example: a shedding card game (read-only, 2026-11-03)
 
 `shared/.../domain`: `GameEngine`, `GameState` (serializable), `Card(suit, value)`, `SuitPile`, `SmartAI`, `EasyAI`.
 
-| NearbyGame | Satti | Watch out |
+| NearbyGame | The card game | Watch out |
 |---|---|---|
 | `State` | `GameState` | `players[i].hand` holds every hand: host only |
-| `Move` | new `@Serializable data class SattiMove(val card: Card?)` | `card = null` is a pass |
+| `Move` | new `@Serializable data class MyMove(val card: Card?)` | `card = null` is a pass |
 | `SeatView` | new view: own hand, other hand sizes, names, `piles`, `currentPlayerIndex`, winner seat index | `GameState.winner` is a whole `Player` with a hand (a stuck-table winner still holds cards): send only the seat index |
 | `newGame` | `Deck.createFullDeck().shuffled(Random(seed))`, `GameEngine.dealCards`, players `isHuman = true`, start at `findStartingPlayerIndex` | `GameEngine.createShuffledDeck()` has no seed: do not use it |
 | `apply` | card: check `card in hand` and `card in engine.getValidMoves(hand, piles)`, then `applyMove`; pass: check `engine.canPass(hand, piles)`, then `applyPass` | `applyMove` does not check the hand (it filters the card out, so a card the player does not hold would still go on a pile); `applyPass` and `SuitPile.place` throw on illegal input |
 | `viewFor` | build from `GameState` | never include `players[j].hand` for `j != seat` |
-| `botMove` | `SmartAI().selectCard(hand, piles, engine)` wrapped as `SattiMove(it)` when it is that seat's turn | a `null` card from the AI is a pass: return `SattiMove(null)`, not `null` |
+| `botMove` | `SmartAI().selectCard(hand, piles, engine)` wrapped as `MyMove(it)` when it is that seat's turn | a `null` card from the AI is a pass: return `MyMove(null)`, not `null` |
 | `isOver` | `state.phase == GamePhase.GameOver` | |
 
 Mark every seat `isHuman = true` so `applyMove` never switches to `BotThinking`; the room decides who is a bot.
@@ -249,16 +248,16 @@ Mark every seat `isHuman = true` so `applyMove` never switches to `BotThinking`;
 - **Bot pacing:** the room plays bots one move at a time, `RoomConfig.botDelayMs` apart (default 1 s; 0 = all at
   once). Do not add delays in the adapter.
 - **Turn timer:** `RoomConfig.turnTimeoutMs` (default 30 s; 0 = off). When a seat's time runs out the host plays that
-  seat's `botMove` for it, so `botMove` must give a sensible move for a human seat too (Satti: a card or a pass;
-  Crazy Eights: a bot move or a draw).
+  seat's `botMove` for it, so `botMove` must give a sensible move for a human seat too (e.g. a card or a pass,
+  or a bot move or a draw).
 - **Countdown:** show `NearbyHost.turnTimer` / `NearbyClient.turnTimer` (`seat`, `remaining`); read `remaining` on
   each frame. No ticking messages are sent.
-- **Whose turn:** override `currentSeat(state, seatCount)` with your engine's current player (Satti:
+- **Whose turn:** override `currentSeat(state, seatCount)` with your engine's current player (e.g.
   `currentPlayerIndex` unless the game is over). The default asks `botMove` for every seat after each change.
-- **Off-turn bot moves (v0.3.1):** if bots may act out of turn (Crazy Eights: catch an uncalled last card, jump in),
-  override `nextBotMove(state, botSeats, seatCount)` with your own bot order and return `BotMove(seat, move)` (uno:
-  `Bots.nextMove`, reading the seat off the move). The room plays it `botDelayMs` later unless another move lands
-  first, then asks again. Satti keeps the default (current seat only).
+- **Off-turn bot moves (v0.3.1):** if bots may act out of turn (e.g. catch an uncalled last card, jump in),
+  override `nextBotMove(state, botSeats, seatCount)` with your own bot order and return `BotMove(seat, move)` (e.g. read the
+  seat off the move). The room plays it `botDelayMs` later unless another move lands
+  first, then asks again. A game with no off-turn moves keeps the default (current seat only).
 - **Race results:** `apply` just refuses a move that is no longer legal; the room tells a player who lost a race "Too
   late, another player already did that." and sends a fresh view. Do not add your own race handling.
 - **Which view the move was picked on (after v0.3.2):** draw the table from `seqView` (`SeqView(seq, view)`, on both

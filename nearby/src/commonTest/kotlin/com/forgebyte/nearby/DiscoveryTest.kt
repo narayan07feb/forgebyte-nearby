@@ -36,7 +36,7 @@ class DiscoveryTest {
     @Test
     fun givenOtherGameOrBrokenTxtOrNoAddress_whenRead_thenSkipped() {
         val txt = roomTxt("fake", config, 2)
-        assertNull(service(txt).toRoomAd("uno"))
+        assertNull(service(txt).toRoomAd("other-game"))
         assertNull(service(txt - "pv").toRoomAd("fake"))
         assertNull(service(txt + ("gv" to "x")).toRoomAd("fake"))
         assertNull(service(txt, addresses = emptyList()).toRoomAd("fake"))
@@ -76,7 +76,7 @@ class DiscoveryTest {
     @Test
     fun givenOtherGameWithoutAddress_whenResolved_thenNotAskedAgain() {
         var again = 0
-        rooms(DiscoveryEvent.Resolved(service(roomTxt("uno", config, 3), addresses = emptyList())) { again++ })
+        rooms(DiscoveryEvent.Resolved(service(roomTxt("other-game", config, 3), addresses = emptyList())) { again++ })
         assertEquals(0, again)
     }
 

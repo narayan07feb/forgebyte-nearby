@@ -100,7 +100,7 @@ class RoomTest {
 
     @Test
     fun givenOtherGame_whenJoins_thenRefusedWrongGame() {
-        assertEquals(RefuseReason.WRONG_GAME, refusal(h.hello("a", gameId = "uno"), "a"))
+        assertEquals(RefuseReason.WRONG_GAME, refusal(h.hello("a", gameId = "other-game"), "a"))
     }
 
     @Test

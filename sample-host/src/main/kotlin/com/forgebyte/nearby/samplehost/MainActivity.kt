@@ -178,7 +178,7 @@ class MainActivity : Activity() {
             append('\n').append("seats ").append(seats?.joinToString(", ") ?: "-")
             if (v != null) append('\n').append("turn seat ${v.turn}  my hand ${v.hand.size}  pile top ${v.pile.lastOrNull() ?: "-"}")
         }
-        runOnUiThread { header.text = text }
+        header.post { header.text = text }
     }
 
     override fun onDestroy() {
@@ -192,7 +192,7 @@ class MainActivity : Activity() {
 
     private fun say(text: String) {
         Log.i("NearbyDemo", text)
-        runOnUiThread { log.append(text + "\n") } // the joiner reports from background threads
+        log.post { log.append(text + "\n") } // the joiner reports from background threads; post runs it on the main thread
     }
 }
 

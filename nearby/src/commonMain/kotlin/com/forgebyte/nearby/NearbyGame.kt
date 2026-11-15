@@ -7,7 +7,7 @@ import kotlinx.serialization.KSerializer
  * and sends each seat only [viewFor] that seat, so a joiner never receives another player's hand.
  */
 public interface NearbyGame<State, Move, SeatView> {
-    /** "uno" or "satti". A joiner of another game is refused. */
+    /** Your game id, e.g. "my-game". A joiner of another game is refused. */
     public val gameId: String
     public val moveSerializer: KSerializer<Move>
     public val viewSerializer: KSerializer<SeatView>
@@ -26,17 +26,17 @@ public interface NearbyGame<State, Move, SeatView> {
     public fun isOver(state: State): Boolean
 
     /**
-     * The seat that must act now, or null when nobody must (game over). Override it with a cheap lookup (Satti:
+     * The seat that must act now, or null when nobody must (game over). Override it with a cheap lookup (e.g.
      * `currentPlayerIndex`): the default asks [botMove] for every seat, which runs the bot up to [seatCount] times
      * after each change (bot pacing and the turn timer need it every time).
      */
     public fun currentSeat(state: State, seatCount: Int): Int? = (0 until seatCount).firstOrNull { botMove(state, it) != null }
 
     /**
-     * The next move any of [botSeats] wants to make now, on its turn or off it (Crazy Eights: catch an uncalled last
+     * The next move any of [botSeats] wants to make now, on its turn or off it (e.g. catch an uncalled last
      * card, jump in), or null when none does. The room asks once after every applied move and plays the answer
      * [RoomConfig.botDelayMs] later, unless another move lands first. The default only plays the current seat's turn;
-     * a game with off-turn moves overrides it with its own bot order (uno: `Bots.nextMove`).
+     * a game with off-turn moves overrides it with its own bot order.
      */
     public fun nextBotMove(state: State, botSeats: Set<Int>, seatCount: Int): BotMove<Move>? =
         currentSeat(state, seatCount)?.takeIf { it in botSeats }?.let { seat -> botMove(state, seat)?.let { BotMove(seat, it) } }

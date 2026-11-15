@@ -20,8 +20,8 @@ local network, and the developer never receives it.
 | address | the host phone's local IP address and port (mDNS A record and SRV) |
 
 No room code, key, check code or player name is in the advert. The room name is set by the game. Games use a
-neutral label, never the player's name (README and `RoomConfig.roomName` KDoc). uno does this today
-(`nearbyRoomLabel`: "Crazy Eights" plus a random word).
+neutral label, never the player's name (README and `RoomConfig.roomName` KDoc). The host game does this today
+(`nearbyRoomLabel`: <game name> plus a random word).
 
 **In the join code, the QR and the short code:** the host's local IP address, port, room code and key fingerprint
 (`JoinCode`), or the last byte of the IP address and the port (`ShortCode`). A player shows these on purpose to the

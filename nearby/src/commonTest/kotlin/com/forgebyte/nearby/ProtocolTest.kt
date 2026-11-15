@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 class ProtocolTest {
     private val lobby = Lobby(
         roomName = "Den",
-        gameId = "uno",
+        gameId = "demo",
         maxSeats = 4,
         phase = Phase.PLAYING,
         seats = listOf(
@@ -25,8 +25,8 @@ class ProtocolTest {
     @Test
     fun givenEveryClientMessage_whenEncodedAndDecoded_thenEqual() {
         listOf(
-            ClientMsg.Hello(1, "uno", 12, "Asha", "secret", reconnectToken = null),
-            ClientMsg.Hello(1, "satti", 3, "Ravi", "secret", reconnectToken = "abc"),
+            ClientMsg.Hello(1, "demo", 12, "Asha", "secret", reconnectToken = null),
+            ClientMsg.Hello(1, "other-game", 3, "Ravi", "secret", reconnectToken = "abc"),
             ClientMsg.Ready(true),
             ClientMsg.Move(json),
             ClientMsg.Leave,
