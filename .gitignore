@@ -16,3 +16,12 @@ captures/
 local.properties
 .env
 debug.keystore
+# Signing, Firebase config, local tools and traces: never in this public repo
+*.jks
+*.keystore
+*.p12
+google-services.json
+GoogleService-Info.plist
+.claude/
+*.pftrace
+*.log

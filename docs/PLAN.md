@@ -314,7 +314,7 @@ can show; run 12 stays **UNEXPLAINED**.
 **2026-11-04 00:08 to 00:11, night run: MINIFIED (R8) `sample-host` release on the Lava (Android 16), Mac joiner,
 same Wi-Fi.** Code: main 29049bb (v0.3.2) plus the #11 test tools; APK 975,603 bytes.
 - Phone discovery after `NearbyAndroid.init` in the R8 build: the phone's NSD found its own room 1.05 s after the
-  host started listening (`discovered 'Nearby test LAVA LZG414' at 192.168.0.106:40961, free 3, canJoin true`):
+  host started listening (`discovered 'Nearby test LAVA LZG414' at <host-ip>:40961, free 3, canJoin true`):
   PASS. The first try in the script printed no line after 13 s, and the phone log had rotated before it could be read
   again, so that miss is UNEXPLAINED; the rerun read the log every 5 s and saw the line at once.
 - Advertise and Mac discovery (JmDNS): found in 5.3 s, join request, host accept, check code `756316` on both ends,
@@ -354,7 +354,7 @@ USB adb serial.
 - Each run: the match starts, the Lava's Wi-Fi goes off for 8 s, and goes off again for 8 s as soon as its address is
   back, before the Mac has reconnected. The Mac showed Reconnecting once, then Connected, kept its seat (PLAYER) and
   the match ended: 3 of 3 PASS.
-- The Lava got the same address back (192.168.0.108) after all 6 drops.
+- The Lava got the same address back (<phone-ip>) after all 6 drops.
 - No crash or ANR lines; volume 0; sample uninstalled (pm list 0); Play apps unchanged; lock freed.
 - Mi A3 half: run on 2026-11-14 (below).
 
@@ -370,7 +370,7 @@ line has the clock and the retry lines. Wi-Fi off only over the Mi A3's USB adb 
   (network path; nothing in the app logs).
 - The 02:47 run 5 first read as PASS, because the kit checked only the last lobby line, after the Mac got back. The
   kit now fails a run on any bot seat line; the other passes here and the Lava 3/3 have none.
-- The Mi A3 got the same address back (192.168.0.106) after every drop.
+- The Mi A3 got the same address back (<phone-ip>) after every drop.
 - No crash or ANR lines; volume 0; sample uninstalled (pm list 0); Play apps unchanged; lock handed on.
 - Result: PASS on both phones (Lava 3/3, Mi A3 11/13), with the two outages above noted.
 
