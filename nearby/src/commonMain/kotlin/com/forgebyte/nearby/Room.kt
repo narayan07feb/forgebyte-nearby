@@ -123,7 +123,7 @@ public class Room<S, M, V>(
      */
     public val nextWakeAt: Long?
         get() = (listOfNotNull(botAt, turnDeadline) +
-            seats.mapNotNull { s -> s.droppedAt?.let { it + config.reconnectWindowMs } } +
+            seats.mapNotNull { s -> s.droppedAt?.takeUnless { isPaused }?.let { it + config.reconnectWindowMs } } +
             pending.map { it.at + config.requestTimeoutMs }).minOrNull()
 
     /** The room as the host sees it. */
@@ -163,6 +163,24 @@ public class Room<S, M, V>(
 
     /** Call about once a second so dropped seats past the reconnect window are freed or taken over by a bot. */
     public fun tick(): List<RoomOutput> = step {}
+
+    /** True between [pause] and [resume]. */
+    public var isPaused: Boolean = false
+        private set
+
+    /**
+     * The host's app went to the background or its screen turned off: the seat-away clock stops for every seat, so no
+     * joiner is freed or put to a bot while the host itself is away (ceo, 16 Nov 2026). Join requests still time out.
+     */
+    public fun pause(): List<RoomOutput> = step { isPaused = true }
+
+    /** The host is back: every away seat gets a fresh full reconnect window from now. Without a [pause], nothing changes. */
+    public fun resume(): List<RoomOutput> = step {
+        if (!isPaused) return@step
+        isPaused = false
+        val now = clock()
+        seats.forEach { if (it.droppedAt != null) it.droppedAt = now }
+    }
 
     public fun addBot(): List<RoomOutput> = step {
         if (phase != Phase.LOBBY || seats.size >= config.maxSeats) return@step
@@ -380,6 +398,7 @@ public class Room<S, M, V>(
             pending.remove(it)
             refuse(it.conn, RefuseReason.REQUEST_TIMED_OUT, "The host did not answer.")
         }
+        if (isPaused) return // the host is away: seat windows wait for resume()
         for (i in seats.indices.reversed()) {
             val at = seats[i].droppedAt ?: continue
             if (now - at >= config.reconnectWindowMs) drop(i, keepToken = true)
