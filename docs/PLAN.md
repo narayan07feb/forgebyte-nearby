@@ -374,6 +374,25 @@ line has the clock and the retry lines. Wi-Fi off only over the Mi A3's USB adb 
 - No crash or ANR lines; volume 0; sample uninstalled (pm list 0); Play apps unchanged; lock handed on.
 - Result: PASS on both phones (Lava 3/3, Mi A3 11/13), with the two outages above noted.
 
+## Next device window: Mi A3 + Sony TV (plan, 2026-11-15)
+
+All no-phone items are done; what is left needs devices. When the owner frees the Mi A3 and the TV, the kits run in
+this order, one at a time, each under its own device locks. Each starts with the preflight 5 minutes before (Mac memory
+free 20 % or more, adb up on the serial the kit uses with USB for the Mi A3, phone battery 30 % or more, TV screen
+awake); a failed preflight is reported at once and the kit does not start.
+
+| # | Kit | Devices | Minutes | What it settles |
+|---|---|---|---|---|
+| 1 | Wi-Fi drop during a reconnect, 5 runs, with the Mac-side probe | Mi A3 host (USB), Mac | about 10 | ROADMAP Open 3: the 52 s gap. The probe logs ARP, ping and TCP to the host's port every 2 s from the first drop until the Mac is connected again. ARP incomplete means the link layer (phone or access point); ARP and ping fine but TCP failing means the phone's socket side. |
+| 2 | 3-seat round, host swaps each run, 4 runs | Mi A3, TV, Mac | about 15 | ROADMAP Open 1 with the TV as the second device: odd runs the Mi A3 hosts, the TV joins by discovery and the Mac by the join code; even runs the TV hosts and the Mi A3 joins by the short code. PASS: both joiners seated, check codes match, match over with no bot seat. Also the first 3-player match on real devices (only 2-seat rooms so far) and the first TV joiner by discovery. |
+| 3 | Two hosts at once, Mac browse only | Mi A3 host, TV host, Mac | about 5 | Whether the TV (Android 14) answers as the shared `Android.local` like Android 9 to 13 hosts do. If it does, the TV and the Mi A3 can test draft PR #38 (ROADMAP Open 2); if not, #38 still needs a second Android 9 to 13 host. |
+
+About 30 minutes with the end steps; if the window is shorter, kit 1 runs alone (it needs only the Mi A3). Kit 1 is
+ready and checked by ceo. Kits 2 and 3 are copies of the Lava + TV kit with the Mi A3 in the Lava's place; their
+checksums go to ceo before the window. Every kit keeps the device rules: media volume 0 and never restored, no Wi-Fi
+toggle on the TV (only the Mi A3's Wi-Fi drops, over USB), no settings changes, our app uninstalled at the end
+(pm list 0), Play apps unchanged.
+
 ## Rules for this repo
 
 - No GitHub Actions; tests run locally (`./gradlew allTests` or the ci-local lane).
