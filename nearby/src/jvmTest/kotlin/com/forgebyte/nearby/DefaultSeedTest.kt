@@ -10,7 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 
-/** Security, uno #59 review: the default deal seed comes from the secure random source, never kotlin Random. */
+/** Security, from a game's security review: the default deal seed comes from the secure random source, never kotlin Random. */
 class DefaultSeedTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

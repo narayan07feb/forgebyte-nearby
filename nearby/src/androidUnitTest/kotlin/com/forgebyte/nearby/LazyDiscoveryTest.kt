@@ -18,7 +18,7 @@ class LazyDiscoveryTest {
 
     @Test
     fun givenInitNotCalled_whenDiscovering_thenClearError() = runTest {
-        val e = assertFailsWith<IllegalStateException> { discoverRooms("uno").first() }
+        val e = assertFailsWith<IllegalStateException> { discoverRooms("demo").first() }
         assertTrue("NearbyAndroid.init" in e.message.orEmpty())
     }
 }

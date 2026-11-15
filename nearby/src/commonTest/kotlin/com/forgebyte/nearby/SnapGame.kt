@@ -20,7 +20,7 @@ sealed interface SnapMove {
 data class SnapView(val hand: List<String>, val pile: List<String>, val turn: Int, val snapOpen: Boolean, val snaps: List<Int>)
 
 /**
- * FakeGame with an off-turn move, like Crazy Eights' catch and jump-in: playing an even card ("C4Z") opens a snap
+ * FakeGame with an off-turn move, like a card game's catch and jump-in: playing an even card ("C4Z") opens a snap
  * window any seat may take. Bots snap off turn (seat order after the current seat), [jump] makes their snap take the turn.
  */
 class SnapGame(private val cardsEach: Int = 6, private val jump: Boolean = false) : NearbyGame<SnapState, SnapMove, SnapView> {

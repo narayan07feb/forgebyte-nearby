@@ -1,14 +1,14 @@
 # forgebyte-nearby: offline play on the same Wi-Fi or hotspot
 
 Owner ask (2026-11-02 22:00): "we can also run the app in intranet instead of internet. a group creator can ask
-other to join its network ... for running offline ... for uno and satti". 2026-11-03: "plan intra net playing for
-uno and satti and start implementation from today", "please create a module so both can share".
+other to join its network ... for running offline ... for <the card games>". 2026-11-03: "plan intra net playing for
+<the card games> and start implementation from today", "please create a module so both can share".
 
 Owner decisions (2026-11-03):
 - One shared module in its own repo (`narayan07feb/forgebyte-nearby`), versioned by git tag and pulled from JitPack,
-  the same way Crazy Eights uses FrameReady.
+  the same way the games pull other shared libraries.
 - Android first; iOS in week 3.
-- A `nearby` session builds this module; the `uno` and `satti` sessions add "Play nearby" to their games; ceo
+- A `nearby` session builds this module; the game sessions add "Play nearby" to their games; ceo
   coordinates and runs the phone tests.
 
 ## Libraries we build on (owner pick, 2026-11-03)
@@ -28,10 +28,10 @@ scratch". ceo searched GitHub; the owner picked:
   consume libraries having ABI version <= 2.2.0"): 1.1.0 to 1.1.2 are built with Kotlin 2.3.20. 1.0.4 (Kotlin 2.1.0)
   compiles on both but misses later fixes, including a crash resolving services on Android below SDK 30 (our minSdk is
   24). Decision (ceo, option A): use 1.1.2 now, since weeks 1 and 2 are Android only. iOS is decided in week 3: ceo
-  leans to moving uno and satti to Kotlin 2.3.20 then (this also unblocks firebase-bom 35); pinning 1.0.4 for iOS is
+  leans to moving the card games to Kotlin 2.3.20 then (this also unblocks firebase-bom 35); pinning 1.0.4 for iOS is
   the fallback.
 - Side effects of dns-sd-kt 1.1.2 inside a game: kotlin-stdlib goes up to 2.3.20, and appcompat 1.7.1 and
-  androidx.startup 1.2.0 are added at runtime. The uno session checks these inside its app when it adds 0.1.0.
+  androidx.startup 1.2.0 are added at runtime. Each game session checks these inside its app when it adds 0.1.0.
 - Seat drop past the reconnect window mid-game: a host bot takes the seat; in the lobby the seat is freed (owner
   approved 2026-11-03).
 
@@ -40,7 +40,7 @@ scratch". ceo searched GitHub; the owner picked:
 Kotlin Multiplatform library (Android now, iOS later). No internet, no Supabase, no accounts.
 
 1. **Discovery.** The host advertises `_forgebyte._tcp` on the local network (Android `NsdManager`, later iOS
-   Bonjour) with TXT fields: game id (`uno`/`satti`), protocol version, room name, seats free. Joiners see a list of
+   Bonjour) with TXT fields: game id (one per game), protocol version, room name, seats free. Joiners see a list of
    rooms nearby. Fallback when discovery is blocked (some routers, hotspots): the host screen shows a QR code and a
    short code (IP + port + room code); the joiner scans or types it. See "Joining" below.
 2. **Transport.** The host phone runs a small WebSocket server (Ktor server CIO, Ktor 3.1.0 like both games);
@@ -53,7 +53,7 @@ Kotlin Multiplatform library (Android now, iOS later). No internet, no Supabase,
 
 ```kotlin
 interface NearbyGame<State, Move, SeatView> {
-    val gameId: String                       // "uno" or "satti"
+    val gameId: String                       // your game id, e.g. "my-game"
     val moveSerializer: KSerializer<Move>
     val viewSerializer: KSerializer<SeatView>
     fun newGame(seats: Int, seed: Long): State
@@ -64,8 +64,7 @@ interface NearbyGame<State, Move, SeatView> {
 }
 ```
 
-   - Crazy Eights plugs in `engine` (`UnoRules`, `Move`, `SeatView`) and `ai` for bots.
-   - Satti plugs in its `shared` rules (`PlayCardUseCase`, `RunBotTurnsUseCase`).
+   - Each card game plugs in its own rules module (`Move`, `SeatView`) and its AI for bots.
 5. **Not in scope.** Web (browsers cannot host or discover), Wi-Fi Direct, internet relay, accounts, chat.
 
 ## Joining: the host approves each join (owner, 2026-11-03)
@@ -84,7 +83,7 @@ interface NearbyGame<State, Move, SeatView> {
 - **Bot pacing:** bots play one move at a time, `RoomConfig.botDelayMs` apart (default 1 s, per game; 0 = all at
   once). Each bot move sends everyone a new view, so joiners see every move.
 - **Turn timer:** `RoomConfig.turnTimeoutMs` (default 30 s; the host can set 0 when making the room). When a player's
-  (or the host's) time runs out, the host plays that seat's `botMove` (Satti: a card or a pass; Crazy Eights: a bot
+  (or the host's) time runs out, the host plays that seat's `botMove` (e.g. a card or a pass, or a bot
   move or a draw), like online play. A move that arrives at the deadline or later is too late. A dropped seat's clock
   keeps running.
 - **Countdown:** each `View` carries `turn = (seat, endsInMs)`, the time left when the host sent it (not a clock time,
@@ -94,8 +93,8 @@ interface NearbyGame<State, Move, SeatView> {
   (works for any adapter, but runs the bot up to N times per change); games should override it with a cheap lookup
   (ceo note, 2026-11-03).
 - **Off-turn bot moves** (ceo, 2026-11-03, v0.3.1): `NearbyGame.nextBotMove(state, botSeats, seatCount)` returns the
-  next move any bot wants, on or off turn (Crazy Eights: catch an uncalled last card, jump in); its default plays only
-  the current seat, so Satti is unchanged; uno overrides it with its own `Bots.nextMove`. The room asks once after every
+  next move any bot wants, on or off turn (e.g. catch an uncalled last card, jump in); its default plays only
+  the current seat, so a turn-only game is unchanged; a game with off-turn moves overrides it with its own bot order. The room asks once after every
   applied move and plays the answer `botDelayMs` later without asking the AI again; any move landing first (a human's
   catch, the turn timer's auto-move, another bot) replaces the plan. In instant mode (0 ms) bots loop until none wants
   to move, capped at 10 000 moves (the cap is traced and stops the loop; it never throws or ends the room).
@@ -197,8 +196,8 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
   NSD stops finding rooms until the games declare and request it (the join code still works).
 - iOS (week 3): `NSLocalNetworkUsageDescription` + `NSBonjourServices` in Info.plist.
 - Play Data safety: no new data leaves the phone (local network only); re-check before release. Facts and suggested
-  answers: `docs/DATA-SAFETY.md`. Satti: Families
-  check (no data sent to other players beyond the display name typed in the room).
+  answers: `docs/DATA-SAFETY.md`. Families
+  check, for a game in that program (no data sent to other players beyond the display name typed in the room).
 
 ## Order of work
 
@@ -206,8 +205,8 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 |---|---|---|
 | Day 1 (3 Nov) | nearby | Repo scaffold (KMP lib, Android target, JitPack `jitpack.yml`, Kotlin 2.2.20, Ktor 3.1.0); protocol messages; room state machine in commonMain with a fake test game; unit tests |
 | Week 1 | nearby | Ktor host server + client, NSD advertise/discover, QR/code fallback, join approval, reconnect window, host-leaves, version refusal; tag `0.1.0` (done 3 Nov) |
-| Week 1 | uno | `NearbyGame` adapter over `UnoRules` + "Play nearby" menu (host / join / lobby), behind a debug flag first |
-| Week 2 | satti | `NearbyGame` adapter over Satti rules + "Play nearby" screens |
+| Week 1 | game A | `NearbyGame` adapter over its rules + "Play nearby" menu (host / join / lobby), behind a debug flag first |
+| Week 2 | game B | `NearbyGame` adapter over its rules + "Play nearby" screens |
 | Week 1 (3 Nov) | nearby | End-to-end encryption (owner moved it to now): P-256 ECDH + HKDF + AES-GCM, fingerprint in the code, check code for list joins; tag `0.2.0` (wire-incompatible with 0.1.0). Release blocker: no store release with nearby play without it |
 | Week 2 | nearby | Bot pacing + turn timer (owner, 3 Nov), tag `0.3.0` (wire-compatible with 0.2.0) |
 | Week 2 | nearby | Battery/heat check, Wi-Fi low-latency lock for slow moves, second real phone (test 4c) |
