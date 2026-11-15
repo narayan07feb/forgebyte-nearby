@@ -30,7 +30,8 @@ Docs: `docs/ADAPTERS.md` (how a game uses the library), `docs/FAKE-PEER.md`, `do
 2. **Discovery when two Android 9 to 13 hosts share the name `Android.local`** (draft PR #38: the host lists its
    IPv4 in the TXT record). Waits for a device slot with two such hosts.
 3. **Causes still UNEXPLAINED or UNVERIFIED** (see the Device test log in `docs/PLAN.md`):
-   - run 12: a joiner got no view after the start (no trace);
+   - run 12: a joiner got no view after the start (no trace; every socket order with one or two joiners passes, so
+     what is left is transport or timing);
    - the 267 s leave (now bounded to 10 s);
    - the Mi A3 drops where every Mac connect timed out for about 52 s after the phone had its address back.
 

@@ -303,6 +303,14 @@ events left a joiner without a view after start, so run 12 is not an ordering fa
 two cut sockets; the transport and timing side is not covered and run 12 stays **UNEXPLAINED** (the Mac was heavily
 loaded that day).
 
+**Two joiners (evidence, 2026-11-15).** `SocketOrderTest` now also plays two joiners in a 3-seat room (the host waits
+for both): 16 orders with no cut and 98,660 with one cut socket each, all ending with both joiners seated, connected and
+on the newest view. To keep it in seconds, orders that only swap independent steps are walked once (a joiner's read or
+cut changes only that joiner); a check compares this with the full walk for one joiner and two cuts and finds the same
+end states. So run 12 is not an ordering fault in `Room` with two joiners either. What is left is the transport and
+timing side (a socket that stays open but stops delivering, a stalled writer), which only a device or a loopback run
+can show; run 12 stays **UNEXPLAINED**.
+
 **2026-11-04 00:08 to 00:11, night run: MINIFIED (R8) `sample-host` release on the Lava (Android 16), Mac joiner,
 same Wi-Fi.** Code: main 29049bb (v0.3.2) plus the #11 test tools; APK 975,603 bytes.
 - Phone discovery after `NearbyAndroid.init` in the R8 build: the phone's NSD found its own room 1.05 s after the
