@@ -91,7 +91,7 @@ public class Room<S, M, V>(
         var heldToken: String? = null
     }
 
-    private class Pending(val id: Int, var conn: String, val name: String, val at: Long, var checkCode: String, val joinId: String?)
+    private class Pending(val id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?)
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -122,8 +122,8 @@ public class Room<S, M, V>(
      * out. Null when nothing is waiting. The transport sleeps until then.
      */
     public val nextWakeAt: Long?
-        get() = (listOfNotNull(botAt, turnDeadline) +
-            seats.mapNotNull { s -> s.droppedAt?.takeUnless { isPaused }?.let { it + config.reconnectWindowMs } } +
+        get() = if (isPaused) null else (listOfNotNull(botAt, turnDeadline) +
+            seats.mapNotNull { s -> s.droppedAt?.let { it + config.reconnectWindowMs } } +
             pending.map { it.at + config.requestTimeoutMs }).minOrNull()
 
     /** The room as the host sees it. */
@@ -165,21 +165,34 @@ public class Room<S, M, V>(
     public fun tick(): List<RoomOutput> = step {}
 
     /** True between [pause] and [resume]. */
-    public var isPaused: Boolean = false
-        private set
+    public val isPaused: Boolean get() = pausedAt != null
+    private var pausedAt: Long? = null
 
     /**
-     * The host's app went to the background or its screen turned off: the seat-away clock stops for every seat, so no
-     * joiner is freed or put to a bot while the host itself is away (ceo, 16 Nov 2026). Join requests still time out.
+     * The host's app went to the background or its screen turned off (ceo, 16 Nov 2026): the whole room clock stops.
+     * No joiner is freed or put to a bot, no turn runs out, no bot moves and no join request times out while the host
+     * itself is away, and joiners see the host's seat as not connected.
      */
-    public fun pause(): List<RoomOutput> = step { isPaused = true }
+    public fun pause(): List<RoomOutput> = step {
+        if (isPaused) return@step
+        pausedAt = clock()
+        broadcastLobby()
+    }
 
-    /** The host is back: every away seat gets a fresh full reconnect window from now. Without a [pause], nothing changes. */
+    /**
+     * The host is back: the turn deadline, a planned bot move and each join request keep the time they had left, and
+     * every away seat gets a fresh full reconnect window from now. Without a [pause], nothing changes.
+     */
     public fun resume(): List<RoomOutput> = step {
-        if (!isPaused) return@step
-        isPaused = false
+        val at = pausedAt ?: return@step
         val now = clock()
+        val paused = now - at
+        pausedAt = null
+        turnDeadline = turnDeadline?.plus(paused)
+        botAt = botAt?.plus(paused)
+        pending.forEach { it.at += paused }
         seats.forEach { if (it.droppedAt != null) it.droppedAt = now }
+        broadcastLobby()
     }
 
     public fun addBot(): List<RoomOutput> = step {
@@ -393,12 +406,12 @@ public class Room<S, M, V>(
     }
 
     private fun expireDropped() {
+        if (isPaused) return // the host is away: requests and seat windows wait for resume()
         val now = clock()
         pending.filter { now - it.at >= config.requestTimeoutMs }.forEach {
             pending.remove(it)
             refuse(it.conn, RefuseReason.REQUEST_TIMED_OUT, "The host did not answer.")
         }
-        if (isPaused) return // the host is away: seat windows wait for resume()
         for (i in seats.indices.reversed()) {
             val at = seats[i].droppedAt ?: continue
             if (now - at >= config.reconnectWindowMs) drop(i, keepToken = true)
@@ -455,6 +468,7 @@ public class Room<S, M, V>(
      * bot move for a human whose time ran out. Either way the move counts as applied, so pending plans are replaced.
      */
     private fun fireDue() {
+        if (isPaused) return // no turn runs out and no bot moves while the host is away
         val now = clock()
         val s = state ?: return
         if (phase != Phase.PLAYING) return
@@ -517,7 +531,8 @@ public class Room<S, M, V>(
         gameId = game.gameId,
         maxSeats = config.maxSeats,
         phase = phase,
-        seats = seats.map { SeatInfo(it.name, it.kind, it.ready, it.kind == SeatKind.BOT || it.conn != null) },
+        // The host's own seat shows not connected while it is paused, so joiners can say the host is away.
+        seats = seats.mapIndexed { i, it -> SeatInfo(it.name, it.kind, it.ready, (it.kind == SeatKind.BOT || it.conn != null) && !(i == 0 && isPaused)) },
         yourSeat = seat,
     )
 

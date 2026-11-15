@@ -140,14 +140,19 @@ class HostPauseTest {
         assertEquals(7_000 + w, room.nextWakeAt)
     }
 
-    @Test // PR-9
-    fun givenHostPaused_whenAJoinRequestWaits_thenItStillTimesOut() {
+    @Test // PR-9 (ceo 16 Nov 03:3x, P6: join requests wait too while the host is paused)
+    fun givenHostPaused_whenAJoinRequestWaitsPastItsTimeout_thenStillWaitingAndTheRestRunsAfterResume() {
         val h = Harness(FakeGame(), Harness.config(approveCodeJoins = true))
-        h.room.pause()
         h.request("a")
-        h.now = Harness.REQUEST_TIMEOUT
-        val out = h.room.tick()
-        assertEquals(RefuseReason.REQUEST_TIMED_OUT, (out.to("a").single() as HostMsg.Refused).reason)
+        h.now = 5_000
+        h.room.pause()
+        h.now = 100_000
+        assertTrue(h.room.tick().to("a").isEmpty(), "the request timed out while the host was paused")
+        h.room.resume()
+        h.now = 100_000 + Harness.REQUEST_TIMEOUT - 5_000 - 1
+        assertTrue(h.room.tick().to("a").isEmpty(), "the request got less than the time it had left")
+        h.now += 1
+        assertEquals(RefuseReason.REQUEST_TIMED_OUT, (h.room.tick().to("a").single() as HostMsg.Refused).reason)
     }
 
     @Test // PR-10
@@ -181,5 +186,61 @@ class HostPauseTest {
         h.now += w
         room.tick()
         assertEquals(SeatKind.PLAYER, room.hostLobby.seats[1].kind)
+    }
+
+    @Test // PR-13: the turn deadline stops while the host is paused, and keeps the time it had left
+    fun givenTurnClockRunning_whenHostPausedPastTheDeadline_thenNoAutoMoveAndTheTimeLeftIsKept() {
+        val h = Harness(FakeGame(), Harness.config(turnTimeoutMs = 10_000))
+        h.hello("a"); h.room.onMessage("a", ClientMsg.Ready(true)); h.room.start(seed = 3) // seat 0 moves first
+        val before = h.room.state
+        h.now = 4_000
+        h.room.pause()
+        h.now = 50_000
+        h.room.tick()
+        assertEquals(before, h.room.state, "the timer played for the host while it was paused")
+        h.room.resume()
+        h.now = 55_999
+        h.room.tick()
+        assertEquals(before, h.room.state, "the deadline did not keep its 6 s left")
+        h.now = 56_000
+        h.room.tick()
+        assertEquals(1, h.room.state!!.turn, "the timer played once the time left ran out after the resume")
+    }
+
+    @Test // PR-14: a planned bot move waits while the host is paused
+    fun givenBotMovePlanned_whenHostPaused_thenNoBotMoveUntilTheDelayRunsAfterResume() {
+        val h = Harness(FakeGame(), Harness.config(botDelayMs = 1_000))
+        h.room.addBot(); h.room.start(seed = 3)
+        h.room.hostMove(FakeMove(h.room.state!!.hands[0].first())) // the bot's turn, planned 1 s later
+        h.room.pause()
+        h.now = 60_000
+        h.room.tick()
+        assertEquals(1, h.room.state!!.turn, "the bot moved while the host was paused")
+        h.room.resume()
+        h.now = 60_999
+        h.room.tick()
+        assertEquals(1, h.room.state!!.turn)
+        h.now = 61_000
+        h.room.tick()
+        assertEquals(0, h.room.state!!.turn, "the bot did not move after its delay ran out")
+    }
+
+    @Test // PR-15: joiners see the host away while it is paused
+    fun givenGame_whenHostPausesAndResumes_thenJoinersSeeTheHostAwayThenBack() {
+        startWithA()
+        assertFalse(room.pause().lastLobby("a").seats[0].connected, "the joiner did not see the host away")
+        assertTrue(room.resume().lastLobby("a").seats[0].connected)
+    }
+
+    @Test // PR-16: while paused nothing is due, so the transport does not wake for the game clock
+    fun givenTurnClockRunning_whenHostPaused_thenNextWakeIsNull() {
+        val h = Harness(FakeGame(), Harness.config(turnTimeoutMs = 10_000))
+        h.hello("a"); h.room.onMessage("a", ClientMsg.Ready(true)); h.room.start(seed = 3)
+        assertEquals(10_000L, h.room.nextWakeAt)
+        h.room.pause()
+        assertEquals(null, h.room.nextWakeAt)
+        h.now = 3_000
+        h.room.resume()
+        assertEquals(13_000L, h.room.nextWakeAt)
     }
 }
