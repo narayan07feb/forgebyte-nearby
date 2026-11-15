@@ -172,7 +172,10 @@ public class NearbyClient<M, V>(
         while (true) {
             var end: EndReason? = null
             // The time this attempt may take to get through the key exchange; null while there is no limit yet.
-            val left = if (token == null) firstConnectFor - started.elapsedNow() else droppedAt?.let { retryFor - it.elapsedNow() }
+            // A reconnect attempt also gets its own limit (connect + key exchange): one attempt that hangs on a port that
+            // accepts but never answers must not use up the whole retry time (16 Nov device run and test).
+            val left = if (token == null) firstConnectFor - started.elapsedNow()
+                else droppedAt?.let { minOf(retryFor - it.elapsedNow(), CONNECT_FOR + HANDSHAKE_FOR) }
             var shook = false
             try {
                 trace("joiner: connecting to $host:$port")
