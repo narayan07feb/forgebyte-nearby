@@ -146,6 +146,70 @@ class ReconnectDeadlineTest {
         }
     }
 
+    private fun keeping(store: SeatStore, wall: () -> Long) =
+        NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope, seatStore = store)
+            .also { it.wallClock = wall }
+
+    /** KS-1 (ceo 16 Nov 04:3x, B): a seat kept after a drop more than 10 min ago is not tried: Unreachable at once. */
+    @Test
+    fun givenSeatDroppedMoreThanTenMinutesAgo_whenResumed_thenUnreachableAtOnceAndTheStoreCleared() = runBlocking<Unit> {
+        withTimeout(20.seconds) {
+            proxy.target = host.open(bindHost = LOOPBACK)
+            val store = InMemorySeatStore()
+            val old = SavedSeat("127.0.0.1", proxy.port, host.fingerprint!!, "fake", "Asha", "tok1", droppedAtMs = 1_000)
+            store.save(old)
+            val c = keeping(store) { 1_000 + 10 * 60_000 + 1 }
+            val t0 = TimeSource.Monotonic.markNow()
+            c.resume(old)
+            assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.first { it is ClientStatus.Ended })
+            assertTrue(t0.elapsedNow() < 1.seconds, "an expired seat was still tried for ${t0.elapsedNow()}")
+            assertEquals(null, store.load(), "the expired seat was not cleared")
+            assertEquals(0, proxy.accepted.get(), "the expired seat's token went to the network")
+        }
+    }
+
+    /** KS-2: a seat dropped 9 min ago is still tried, and the host gives it back. */
+    @Test
+    fun givenSeatDroppedNineMinutesAgo_whenResumed_thenTheHostGivesItBack() = runBlocking<Unit> {
+        withTimeout(20.seconds) {
+            proxy.target = host.open(bindHost = LOOPBACK)
+            val store = InMemorySeatStore()
+            val first = keeping(store) { 0L }
+            first.join(JoinCode("127.0.0.1", proxy.port, Harness.SECRET, host.fingerprint!!), "Asha")
+            first.status.first { it == ClientStatus.Connected }
+            val seat = store.load()!!.copy(droppedAtMs = 1_000)
+            val again = keeping(store) { 1_000 + 9 * 60_000 }
+            again.resume(seat)
+            assertEquals(ClientStatus.Connected, again.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
+        }
+    }
+
+    /** KS-3: a drop writes its time into the store; the next welcome clears it again (seated: null). */
+    @Test
+    fun givenSeatedJoiner_whenTheLinkDropsAndComesBack_thenTheStoreHasTheDropTimeThenNull() = runBlocking<Unit> {
+        withTimeout(30.seconds) {
+            proxy.target = host.open(bindHost = LOOPBACK)
+            val store = InMemorySeatStore()
+            val c = keeping(store) { 42_000L }
+            c.join(JoinCode("127.0.0.1", proxy.port, Harness.SECRET, host.fingerprint!!), "Asha")
+            c.status.first { it == ClientStatus.Connected }
+            assertEquals(null, store.load()!!.droppedAtMs)
+            proxy.silent = true
+            c.status.first { it == ClientStatus.Reconnecting }
+            assertEquals(42_000L, store.load()!!.droppedAtMs, "the drop time was not saved")
+            proxy.silent = false
+            c.status.first { it == ClientStatus.Connected }
+            assertEquals(null, store.load()!!.droppedAtMs, "a welcome did not clear the drop time")
+        }
+    }
+
+    /** KS-4: a seat saved by an older version (no drop time) reads as seated, and resume tries it as before. */
+    @Test
+    fun givenOldSavedTextWithoutTheDropTime_whenParsed_thenItReadsAsSeated() {
+        val old = """{"host":"127.0.0.1","port":1,"fingerprint":"ab","gameId":"fake","name":"Asha","token":"tok1"}"""
+        assertEquals(null, SavedSeat.parse(old)!!.droppedAtMs)
+    }
+
     /** Ends at the limit: not before it (it kept trying), and not long after (no attempt held it). */
     private fun assertInWindow(took: Duration, limit: Duration) =
         assertTrue(took >= limit - 1.seconds && took < limit + 3.seconds, "ended after $took, limit $limit")
@@ -155,6 +219,8 @@ class ReconnectDeadlineTest {
         private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
         private val open = Collections.synchronizedList(mutableListOf<Socket>())
         val port: Int = server.localPort
+        /** Connections the proxy accepted, so a test can prove nothing reached the network. */
+        val accepted = java.util.concurrent.atomic.AtomicInteger()
         @Volatile var target = 0
         @Volatile var silent = false
             set(value) {
@@ -166,6 +232,7 @@ class ReconnectDeadlineTest {
             thread(isDaemon = true) {
                 while (!server.isClosed) {
                     val inbound = runCatching { server.accept() }.getOrNull() ?: break
+                    accepted.incrementAndGet()
                     if (silent) { held += inbound; continue } // accepted, never read or answered
                     val outbound = runCatching { Socket(InetAddress.getLoopbackAddress(), target) }.getOrNull()
                         ?: run { inbound.close(); null } ?: continue

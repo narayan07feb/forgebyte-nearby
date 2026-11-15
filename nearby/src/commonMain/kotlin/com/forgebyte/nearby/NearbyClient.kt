@@ -29,7 +29,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.KSerializer
 import kotlin.concurrent.Volatile
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 import kotlin.time.TimeSource
 
 public sealed interface ClientStatus {
@@ -150,8 +153,24 @@ public class NearbyClient<M, V>(
      */
     public fun resume(seat: SavedSeat): Job {
         require(seat.gameId == gameId) { "the saved seat is for ${seat.gameId}, not $gameId" }
+        // A seat kept after a drop expires 10 min after that drop (ceo, 16 Nov 2026): it is not tried at all, so its
+        // token never goes out and a dead room costs no retry time.
+        val droppedAt = seat.droppedAtMs
+        if (droppedAt != null && wallClock() - droppedAt > keptSeatFor.inWholeMilliseconds) {
+            trace("joiner: kept seat dropped ${wallClock() - droppedAt} ms ago; not resumed")
+            seatStore.clear()
+            _status.value = ClientStatus.Ended(EndReason.Unreachable)
+            return Job().apply { complete() }
+        }
         return connect(seat.host, seat.port, secret = null, fingerprint = seat.fingerprint, seat.name, resumeToken = seat.token)
     }
+
+    /** Wall clock in epoch ms, for the age of a kept seat; tests set it. */
+    @OptIn(ExperimentalTime::class)
+    internal var wallClock: () -> Long = { Clock.System.now().toEpochMilliseconds() }
+
+    /** How long a seat kept after a drop may still be resumed (ceo, 16 Nov 2026: 10 min after the last drop). */
+    internal var keptSeatFor: Duration = KEPT_SEAT_FOR
 
     /** How long a dropped seat keeps reconnecting before it ends [EndReason.Unreachable]; tests shorten it. */
     internal var retryFor: Duration = RETRY_FOR
@@ -173,6 +192,7 @@ public class NearbyClient<M, V>(
         // A resume is a reconnect from the start: its retry time runs from now, so a dead host cannot hold it.
         var droppedAt: TimeSource.Monotonic.ValueTimeMark? = if (resumeToken != null) started else null
         var pausedAtDrop = pausedTotal() // time paused before this drop; only later pauses stop the retry clock
+        var saved: SavedSeat? = null // the seat as last welcomed, so a drop can record when it happened
         // How long the retry clock has run since the drop, without the time the app was paused.
         fun retried(at: TimeSource.Monotonic.ValueTimeMark) = at.elapsedNow() - (pausedTotal() - pausedAtDrop)
         while (true) {
@@ -243,7 +263,8 @@ public class NearbyClient<M, V>(
                             welcomed = true
                             token = msg.reconnectToken
                             droppedAt = null
-                            seatStore.save(SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken))
+                            saved = SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken)
+                            seatStore.save(saved!!)
                         }
                         end = handle(msg)
                         if (end != null) break
@@ -263,7 +284,11 @@ public class NearbyClient<M, V>(
                 val giveUp = if (token == null) {
                     started.elapsedNow() > firstConnectFor
                 } else {
-                    val at = droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it; pausedAtDrop = pausedTotal() }
+                    val at = droppedAt ?: TimeSource.Monotonic.markNow().also {
+                        droppedAt = it
+                        pausedAtDrop = pausedTotal()
+                        saved?.let { seat -> seatStore.save(seat.copy(droppedAtMs = wallClock())) } // the kept seat's age
+                    }
                     pausedSince == null && retried(at) > retryFor
                 }
                 if (giveUp) end = EndReason.Unreachable
@@ -384,6 +409,7 @@ public class NearbyClient<M, V>(
 
     private companion object {
         val RETRY_FOR = 120.seconds
+        val KEPT_SEAT_FOR = 10.minutes
         val CONNECT_FOR = 5.seconds
         val HANDSHAKE_FOR = 5.seconds
         /** How long a session that has started to close may stay open before the attempt ends (silent link). */
