@@ -83,6 +83,9 @@ public class NearbyClient<M, V>(
     private class Link(val socket: DefaultClientWebSocketSession, val secure: SecureSession)
 
     @Volatile private var link: Link? = null
+    @Volatile private var pausedSince: TimeSource.Monotonic.ValueTimeMark? = null
+    @Volatile private var pausedBefore: Duration = Duration.ZERO
+
     /** The connect attempt now running, so a silent-link watchdog can end it; see [bounded]. */
     @Volatile private var attemptJob: Job? = null
     private val sendLock = Mutex() // seal and send in one step, so frame counters reach the host in order
@@ -169,13 +172,19 @@ public class NearbyClient<M, V>(
         var token: String? = resumeToken
         // A resume is a reconnect from the start: its retry time runs from now, so a dead host cannot hold it.
         var droppedAt: TimeSource.Monotonic.ValueTimeMark? = if (resumeToken != null) started else null
+        var pausedAtDrop = pausedTotal() // time paused before this drop; only later pauses stop the retry clock
+        // How long the retry clock has run since the drop, without the time the app was paused.
+        fun retried(at: TimeSource.Monotonic.ValueTimeMark) = at.elapsedNow() - (pausedTotal() - pausedAtDrop)
         while (true) {
             var end: EndReason? = null
             // The time this attempt may take to get through the key exchange; null while there is no limit yet.
             // A reconnect attempt also gets its own limit (connect + key exchange): one attempt that hangs on a port that
             // accepts but never answers must not use up the whole retry time (16 Nov device run and test).
             val left = if (token == null) firstConnectFor - started.elapsedNow()
-                else droppedAt?.let { minOf(retryFor - it.elapsedNow(), CONNECT_FOR + HANDSHAKE_FOR) }
+                else droppedAt?.let {
+                    val each = minOf(retryFor - retried(it), CONNECT_FOR + HANDSHAKE_FOR)
+                    if (pausedSince != null) each.coerceAtLeast(CONNECT_FOR) else each // paused: keep trying, never give up
+                }
             var shook = false
             try {
                 trace("joiner: connecting to $host:$port")
@@ -254,13 +263,16 @@ public class NearbyClient<M, V>(
                 val giveUp = if (token == null) {
                     started.elapsedNow() > firstConnectFor
                 } else {
-                    (droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it }).elapsedNow() > retryFor
+                    val at = droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it; pausedAtDrop = pausedTotal() }
+                    pausedSince == null && retried(at) > retryFor
                 }
                 if (giveUp) end = EndReason.Unreachable
             }
             end?.let {
                 trace("joiner: ended $it")
-                if (token != null) seatStore.clear() // this seat is gone for good; a join that never got one keeps the store
+                // The seat is gone for good after a refusal, a kick or a leave. After Unreachable the host may still hold it
+                // (a bot plays it), so the token stays for a later resume (ceo, 16 Nov 2026). A join without a seat keeps it.
+                if (token != null && it != EndReason.Unreachable) seatStore.clear()
                 _status.value = ClientStatus.Ended(it)
                 http.close()
                 return@launch
@@ -295,6 +307,23 @@ public class NearbyClient<M, V>(
      * Sending returns false while the connection is down or not yet welcomed (the message is dropped, never thrown).
      * After the reconnect the host sends the current view again, so the player can simply try again.
      */
+    /**
+     * The joiner's app went to the background or its screen turned off: the reconnect retry time stops counting, so the
+     * joiner does not give up while the OS may be holding its network (ceo, 16 Nov 2026). It keeps trying meanwhile.
+     */
+    public fun pause() {
+        if (pausedSince == null) pausedSince = TimeSource.Monotonic.markNow()
+    }
+
+    /** The joiner's app is back in front: the retry time counts again from where it stopped. Not [resume] with a seat. */
+    public fun resume() {
+        pausedSince?.let { pausedBefore += it.elapsedNow() }
+        pausedSince = null
+    }
+
+    /** All the time spent paused so far, including a pause that is still on. */
+    private fun pausedTotal(): Duration = pausedBefore + (pausedSince?.elapsedNow() ?: Duration.ZERO)
+
     public suspend fun ready(ready: Boolean): Boolean = send(ClientMsg.Ready(ready))
 
     /**

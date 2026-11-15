@@ -81,6 +81,71 @@ class ReconnectDeadlineTest {
         }
     }
 
+    /**
+     * A2a (ceo 16 Nov 03:3x): a joiner that gives up as Unreachable keeps its seat token, so the game can rejoin when it
+     * comes back to the front; the host, still holding the seat, gives it back (device run: the Lava's token was cleared
+     * after 120 s in the background and the player saw 'Room closed' although the host kept the seat).
+     */
+    @Test
+    fun givenSeatedJoiner_whenItGivesUpUnreachable_thenTheStoreKeepsTheSeatAndAResumeGetsItBack() = runBlocking<Unit> {
+        withTimeout(30.seconds) {
+            proxy.target = host.open(bindHost = LOOPBACK)
+            val store = InMemorySeatStore()
+            val c = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope, seatStore = store)
+                .also { it.retryFor = 3.seconds }
+            c.join(JoinCode("127.0.0.1", proxy.port, Harness.SECRET, host.fingerprint!!), "Asha")
+            assertEquals(ClientStatus.Connected, c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
+            proxy.silent = true
+            assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.first { it is ClientStatus.Ended })
+            val kept = store.load()
+            assertTrue(kept != null, "the seat token was cleared when the joiner gave up")
+
+            proxy.silent = false // the host is reachable again (the app came back to the front)
+            val again = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope, seatStore = store)
+            again.resume(kept)
+            assertEquals(ClientStatus.Connected, again.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
+            host.lobby.first { it.seats.size == 2 && it.seats[1].connected }
+        }
+    }
+
+    /** A2b: while the joiner app is paused (background) its retry clock does not run, so it does not give up. */
+    @Test
+    fun givenPausedJoiner_whenTheHostIsGoneLongerThanTheRetryTime_thenItWaitsAndReconnectsAfterResume() = runBlocking<Unit> {
+        withTimeout(40.seconds) {
+            proxy.target = host.open(bindHost = LOOPBACK)
+            val c = client().also { it.retryFor = 3.seconds }
+            c.join(JoinCode("127.0.0.1", proxy.port, Harness.SECRET, host.fingerprint!!), "Asha")
+            assertEquals(ClientStatus.Connected, c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
+            c.pause()
+            proxy.silent = true
+            c.status.first { it == ClientStatus.Reconnecting }
+            kotlinx.coroutines.delay(7_000) // more than twice the retry time
+            assertEquals(ClientStatus.Reconnecting, c.status.value, "the joiner gave up while it was paused")
+            proxy.silent = false
+            c.resume()
+            assertEquals(ClientStatus.Connected, c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
+        }
+    }
+
+    /** A2c: after a pause the retry clock runs again from the resume, so a host that never returns still ends it. */
+    @Test
+    fun givenPausedJoiner_whenResumedAndTheHostNeverReturns_thenUnreachableOneRetryTimeAfterResume() = runBlocking<Unit> {
+        withTimeout(40.seconds) {
+            proxy.target = host.open(bindHost = LOOPBACK)
+            val c = client().also { it.retryFor = 3.seconds }
+            c.join(JoinCode("127.0.0.1", proxy.port, Harness.SECRET, host.fingerprint!!), "Asha")
+            assertEquals(ClientStatus.Connected, c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
+            c.pause()
+            proxy.silent = true
+            c.status.first { it == ClientStatus.Reconnecting }
+            kotlinx.coroutines.delay(5_000)
+            c.resume()
+            val t0 = TimeSource.Monotonic.markNow()
+            assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.first { it is ClientStatus.Ended })
+            assertInWindow(t0.elapsedNow(), 3.seconds)
+        }
+    }
+
     /** Ends at the limit: not before it (it kept trying), and not long after (no attempt held it). */
     private fun assertInWindow(took: Duration, limit: Duration) =
         assertTrue(took >= limit - 1.seconds && took < limit + 3.seconds, "ended after $took, limit $limit")
