@@ -83,6 +83,8 @@ public class NearbyClient<M, V>(
     private class Link(val socket: DefaultClientWebSocketSession, val secure: SecureSession)
 
     @Volatile private var link: Link? = null
+    /** The connect attempt now running, so a silent-link watchdog can end it; see [bounded]. */
+    @Volatile private var attemptJob: Job? = null
     private val sendLock = Mutex() // seal and send in one step, so frame counters reach the host in order
     @Volatile private var leaving = false
     @Volatile private var lastSeq = 0
@@ -200,6 +202,18 @@ public class NearbyClient<M, V>(
                     pinned = secure.hostFingerprint
                     _checkCode.value = secure.checkCode
                     link = Link(this, secure)
+                    // A link that goes silent with no FIN: Ktor's pinger starts the close after its pong timeout, but the
+                    // close never gets an answer, so 'incoming' would wait until the link comes back. End the attempt soon
+                    // after the close starts; the grace lets a normal close deliver the host's last messages first.
+                    val session = this
+                    val watchdog = launch {
+                        val reason = session.closeReason.await()
+                        delay(CLOSE_GRACE)
+                        trace("joiner: session closing ($reason) but still open; ending this attempt")
+                        // Neither session.cancel() nor ending the read loop is enough: webSocket {} then waits for the
+                        // close to finish, which a silent link never does (16 Nov test). Cancel the whole attempt.
+                        attemptJob?.cancel()
+                    }
                     // A reconnect proves the seat with its token alone, so a seat that joined by request comes back too.
                     val hello = ClientMsg.Hello(
                         PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token,
@@ -222,6 +236,7 @@ public class NearbyClient<M, V>(
                         end = handle(msg)
                         if (end != null) break
                     }
+                    watchdog.cancel()
                 } }
             } catch (e: Exception) {
                 // Our own cancellation goes on up; a socket error or a cut session is a drop, handled below.
@@ -260,6 +275,7 @@ public class NearbyClient<M, V>(
      */
     private suspend fun bounded(left: Duration?, done: () -> Boolean, attempt: suspend () -> Unit) = coroutineScope {
         val job = launch { attempt() }
+        attemptJob = job
         if (left != null) {
             val watchdog = launch {
                 delay(left)
@@ -338,6 +354,8 @@ public class NearbyClient<M, V>(
         val RETRY_FOR = 120.seconds
         val CONNECT_FOR = 5.seconds
         val HANDSHAKE_FOR = 5.seconds
+        /** How long a session that has started to close may stay open before the attempt ends (silent link). */
+        val CLOSE_GRACE = 2.seconds
         const val VERSION_MESSAGE = "This room uses a different version of nearby play. Update the app on both phones."
     }
 }

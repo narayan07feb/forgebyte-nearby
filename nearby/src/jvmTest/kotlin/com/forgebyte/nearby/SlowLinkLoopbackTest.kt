@@ -145,6 +145,28 @@ class SlowLinkLoopbackTest {
         }
     }
 
+    /**
+     * A link that goes silent with no FIN (Wi-Fi lost while the socket stays up): the joiner's own pings get no pong, so
+     * it must notice within its ping timeout (10 s) and go Reconnecting, not sit on Connected until the link comes back
+     * (16 Nov device run, uno's stall probe: the joiner stayed Connected for the whole 45 s stall).
+     */
+    @Test
+    fun givenASeatedJoiner_whenTheLinkGoesSilentWithNoFin_thenItReconnectsWithinItsPingTimeout() = runBlocking<Unit> {
+        withTimeout(60.seconds) {
+            val relay = DelayRelay(host.open(bindHost = LOOPBACK), 0..0)
+            val client = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope)
+            client.join(JoinCode(LOOPBACK, relay.port, Harness.SECRET, host.fingerprint!!), "P1")
+            client.status.first { it == ClientStatus.Connected }
+            val stalled = TimeSource.Monotonic.markNow()
+            relay.stall(40_000)
+            val seen = withTimeoutOrNull(25.seconds) { client.status.first { it == ClientStatus.Reconnecting } }
+            assertTrue(seen != null, "the joiner sat on ${client.status.value} for 25 s on a silent link")
+            val after = stalled.elapsedNow()
+            assertTrue(after >= 5.seconds, "the joiner gave up on a link that was quiet only $after")
+            client.leave()
+        }
+    }
+
     @Test
     fun givenALinkThatHangsForSixSeconds_whenFullMatch_thenTheGameCarriesOnWithNoReconnect() = runBlocking<Unit> {
         withTimeout(60.seconds) {
