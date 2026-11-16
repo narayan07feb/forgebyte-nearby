@@ -161,7 +161,7 @@ class SlowLinkLoopbackTest {
     /**
      * A link that goes silent with no FIN (Wi-Fi lost while the socket stays up): the joiner's own pings get no pong, so
      * it must notice within its ping timeout (10 s) and go Reconnecting, not sit on Connected until the link comes back
-     * (16 Nov device run, uno's stall probe: the joiner stayed Connected for the whole 45 s stall).
+     * (16 Nov device run, a stall probe in a game test build: the joiner stayed Connected for the whole 45 s stall).
      */
     @Test
     fun givenASeatedJoiner_whenTheLinkGoesSilentWithNoFin_thenItReconnectsWithinItsPingTimeout() = runBlocking<Unit> {
