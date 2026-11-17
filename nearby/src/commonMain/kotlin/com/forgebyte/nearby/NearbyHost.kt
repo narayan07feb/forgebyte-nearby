@@ -154,7 +154,6 @@ public class NearbyHost<S, M, V>(
     /** [seenSeq]: the seq of the view the move was picked on ([SeqView.seq]); see [NearbyClient.move]. */
     public suspend fun move(move: M, seenSeq: Int = hostSeq): Unit = act { hostMove(move, seenSeq) }
 
-    /** Ends the room for everyone, then stops the server. */
     /**
      * Call when the host's app goes to the background or its screen turns off: joiners who lose their link meanwhile keep
      * their seats (no bot), and [resume] gives each of them a fresh reconnect window.
@@ -164,6 +163,7 @@ public class NearbyHost<S, M, V>(
     /** Call when the host's app is back in front; see [pause]. */
     public suspend fun resume(): Unit = act { resume() }
 
+    /** Ends the room for everyone, then stops the server. */
     public suspend fun leave() {
         val t0 = TimeSource.Monotonic.markNow()
         act { hostLeave() }
