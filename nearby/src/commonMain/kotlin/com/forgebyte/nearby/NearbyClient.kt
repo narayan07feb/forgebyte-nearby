@@ -29,7 +29,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.KSerializer
 import kotlin.concurrent.Volatile
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 import kotlin.time.TimeSource
 
 public sealed interface ClientStatus {
@@ -83,6 +86,11 @@ public class NearbyClient<M, V>(
     private class Link(val socket: DefaultClientWebSocketSession, val secure: SecureSession)
 
     @Volatile private var link: Link? = null
+    @Volatile private var pausedSince: TimeSource.Monotonic.ValueTimeMark? = null
+    @Volatile private var pausedBefore: Duration = Duration.ZERO
+
+    /** The connect attempt now running, so a silent-link watchdog can end it; see [bounded]. */
+    @Volatile private var attemptJob: Job? = null
     private val sendLock = Mutex() // seal and send in one step, so frame counters reach the host in order
     @Volatile private var leaving = false
     @Volatile private var lastSeq = 0
@@ -145,8 +153,24 @@ public class NearbyClient<M, V>(
      */
     public fun resume(seat: SavedSeat): Job {
         require(seat.gameId == gameId) { "the saved seat is for ${seat.gameId}, not $gameId" }
+        // A seat kept after a drop expires 10 min after that drop (ceo, 16 Nov 2026): it is not tried at all, so its
+        // token never goes out and a dead room costs no retry time.
+        val droppedAt = seat.droppedAtMs
+        if (droppedAt != null && wallClock() - droppedAt > keptSeatFor.inWholeMilliseconds) {
+            trace("joiner: kept seat dropped ${wallClock() - droppedAt} ms ago; not resumed")
+            seatStore.clear()
+            _status.value = ClientStatus.Ended(EndReason.Unreachable)
+            return Job().apply { complete() }
+        }
         return connect(seat.host, seat.port, secret = null, fingerprint = seat.fingerprint, seat.name, resumeToken = seat.token)
     }
+
+    /** Wall clock in epoch ms, for the age of a kept seat; tests set it. */
+    @OptIn(ExperimentalTime::class)
+    internal var wallClock: () -> Long = { Clock.System.now().toEpochMilliseconds() }
+
+    /** How long a seat kept after a drop may still be resumed (ceo, 16 Nov 2026: 10 min after the last drop). */
+    internal var keptSeatFor: Duration = KEPT_SEAT_FOR
 
     /** How long a dropped seat keeps reconnecting before it ends [EndReason.Unreachable]; tests shorten it. */
     internal var retryFor: Duration = RETRY_FOR
@@ -167,10 +191,20 @@ public class NearbyClient<M, V>(
         var token: String? = resumeToken
         // A resume is a reconnect from the start: its retry time runs from now, so a dead host cannot hold it.
         var droppedAt: TimeSource.Monotonic.ValueTimeMark? = if (resumeToken != null) started else null
+        var pausedAtDrop = pausedTotal() // time paused before this drop; only later pauses stop the retry clock
+        var saved: SavedSeat? = null // the seat as last welcomed, so a drop can record when it happened
+        // How long the retry clock has run since the drop, without the time the app was paused.
+        fun retried(at: TimeSource.Monotonic.ValueTimeMark) = at.elapsedNow() - (pausedTotal() - pausedAtDrop)
         while (true) {
             var end: EndReason? = null
             // The time this attempt may take to get through the key exchange; null while there is no limit yet.
-            val left = if (token == null) firstConnectFor - started.elapsedNow() else droppedAt?.let { retryFor - it.elapsedNow() }
+            // A reconnect attempt also gets its own limit (connect + key exchange): one attempt that hangs on a port that
+            // accepts but never answers must not use up the whole retry time (16 Nov device run and test).
+            val left = if (token == null) firstConnectFor - started.elapsedNow()
+                else droppedAt?.let {
+                    val each = minOf(retryFor - retried(it), CONNECT_FOR + HANDSHAKE_FOR)
+                    if (pausedSince != null) each.coerceAtLeast(CONNECT_FOR) else each // paused: keep trying, never give up
+                }
             var shook = false
             try {
                 trace("joiner: connecting to $host:$port")
@@ -200,6 +234,18 @@ public class NearbyClient<M, V>(
                     pinned = secure.hostFingerprint
                     _checkCode.value = secure.checkCode
                     link = Link(this, secure)
+                    // A link that goes silent with no FIN: Ktor's pinger starts the close after its pong timeout, but the
+                    // close never gets an answer, so 'incoming' would wait until the link comes back. End the attempt soon
+                    // after the close starts; the grace lets a normal close deliver the host's last messages first.
+                    val session = this
+                    val watchdog = launch {
+                        val reason = session.closeReason.await()
+                        delay(CLOSE_GRACE)
+                        trace("joiner: session closing ($reason) but still open; ending this attempt")
+                        // Neither session.cancel() nor ending the read loop is enough: webSocket {} then waits for the
+                        // close to finish, which a silent link never does (16 Nov test). Cancel the whole attempt.
+                        attemptJob?.cancel()
+                    }
                     // A reconnect proves the seat with its token alone, so a seat that joined by request comes back too.
                     val hello = ClientMsg.Hello(
                         PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token,
@@ -217,11 +263,13 @@ public class NearbyClient<M, V>(
                             welcomed = true
                             token = msg.reconnectToken
                             droppedAt = null
-                            seatStore.save(SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken))
+                            saved = SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken)
+                            seatStore.save(saved!!)
                         }
                         end = handle(msg)
                         if (end != null) break
                     }
+                    watchdog.cancel()
                 } }
             } catch (e: Exception) {
                 // Our own cancellation goes on up; a socket error or a cut session is a drop, handled below.
@@ -236,13 +284,20 @@ public class NearbyClient<M, V>(
                 val giveUp = if (token == null) {
                     started.elapsedNow() > firstConnectFor
                 } else {
-                    (droppedAt ?: TimeSource.Monotonic.markNow().also { droppedAt = it }).elapsedNow() > retryFor
+                    val at = droppedAt ?: TimeSource.Monotonic.markNow().also {
+                        droppedAt = it
+                        pausedAtDrop = pausedTotal()
+                        saved?.let { seat -> seatStore.save(seat.copy(droppedAtMs = wallClock())) } // the kept seat's age
+                    }
+                    pausedSince == null && retried(at) > retryFor
                 }
                 if (giveUp) end = EndReason.Unreachable
             }
             end?.let {
                 trace("joiner: ended $it")
-                if (token != null) seatStore.clear() // this seat is gone for good; a join that never got one keeps the store
+                // The seat is gone for good after a refusal, a kick or a leave. After Unreachable the host may still hold it
+                // (a bot plays it), so the token stays for a later resume (ceo, 16 Nov 2026). A join without a seat keeps it.
+                if (token != null && it != EndReason.Unreachable) seatStore.clear()
                 _status.value = ClientStatus.Ended(it)
                 http.close()
                 return@launch
@@ -260,6 +315,7 @@ public class NearbyClient<M, V>(
      */
     private suspend fun bounded(left: Duration?, done: () -> Boolean, attempt: suspend () -> Unit) = coroutineScope {
         val job = launch { attempt() }
+        attemptJob = job
         if (left != null) {
             val watchdog = launch {
                 delay(left)
@@ -271,6 +327,23 @@ public class NearbyClient<M, V>(
             job.invokeOnCompletion { watchdog.cancel() }
         }
     }
+
+    /**
+     * The joiner's app went to the background or its screen turned off: the reconnect retry time stops counting, so the
+     * joiner does not give up while the OS may be holding its network (ceo, 16 Nov 2026). It keeps trying meanwhile.
+     */
+    public fun pause() {
+        if (pausedSince == null) pausedSince = TimeSource.Monotonic.markNow()
+    }
+
+    /** The joiner's app is back in front: the retry time counts again from where it stopped. Not [resume] with a seat. */
+    public fun resume() {
+        pausedSince?.let { pausedBefore += it.elapsedNow() }
+        pausedSince = null
+    }
+
+    /** All the time spent paused so far, including a pause that is still on. */
+    private fun pausedTotal(): Duration = pausedBefore + (pausedSince?.elapsedNow() ?: Duration.ZERO)
 
     /**
      * Sending returns false while the connection is down or not yet welcomed (the message is dropped, never thrown).
@@ -336,8 +409,11 @@ public class NearbyClient<M, V>(
 
     private companion object {
         val RETRY_FOR = 120.seconds
+        val KEPT_SEAT_FOR = 10.minutes
         val CONNECT_FOR = 5.seconds
         val HANDSHAKE_FOR = 5.seconds
+        /** How long a session that has started to close may stay open before the attempt ends (silent link). */
+        val CLOSE_GRACE = 2.seconds
         const val VERSION_MESSAGE = "This room uses a different version of nearby play. Update the app on both phones."
     }
 }
