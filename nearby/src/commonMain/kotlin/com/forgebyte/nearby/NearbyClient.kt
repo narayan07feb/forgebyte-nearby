@@ -329,10 +329,6 @@ public class NearbyClient<M, V>(
     }
 
     /**
-     * Sending returns false while the connection is down or not yet welcomed (the message is dropped, never thrown).
-     * After the reconnect the host sends the current view again, so the player can simply try again.
-     */
-    /**
      * The joiner's app went to the background or its screen turned off: the reconnect retry time stops counting, so the
      * joiner does not give up while the OS may be holding its network (ceo, 16 Nov 2026). It keeps trying meanwhile.
      */
@@ -349,6 +345,10 @@ public class NearbyClient<M, V>(
     /** All the time spent paused so far, including a pause that is still on. */
     private fun pausedTotal(): Duration = pausedBefore + (pausedSince?.elapsedNow() ?: Duration.ZERO)
 
+    /**
+     * Sending returns false while the connection is down or not yet welcomed (the message is dropped, never thrown).
+     * After the reconnect the host sends the current view again, so the player can simply try again.
+     */
     public suspend fun ready(ready: Boolean): Boolean = send(ClientMsg.Ready(ready))
 
     /**
