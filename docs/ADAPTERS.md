@@ -48,7 +48,9 @@ The phone with the hotspot can host or join. A match on a hotspot is an owner te
 ## Seat back after the app was killed (ceo, 2026-11-07)
 
 - Pass a `SeatStore` to `NearbyClient(..., seatStore = store)`. The client saves a `SavedSeat` on every welcome and
-  clears it when the seat ends for good (left, kicked, refused, host left, unreachable). A kill does not clear it.
+  clears it when the seat ends for good (left, kicked, refused, host left). A kill does not clear it. After
+  `Ended(Unreachable)` it keeps the seat for 10 minutes from the drop, as the host may still hold it (see "App in the
+  background or screen off" below).
 - On the next app start, if `store.load()` is not null, offer "Back to your game" and call `client.resume(saved)`. The
   room key is checked before the token is sent, so another host now on the same address never gets it
   (`EndReason.HostKeyMismatch`). The host gives the seat back, also after a bot took it over.
@@ -60,6 +62,48 @@ The phone with the hotspot can host or join. A match on a hotspot is an owner te
 - `Reconnecting` never lasts more than about 2 minutes (`RETRY_FOR`), even when the host's address takes the
   connection and then hangs. After `Reconnecting`, `Ended(Unreachable)` means the host is gone: show "The host left.
   Back to the menu." with one button to the menu, not a retry spinner.
+
+## App in the background or screen off (device rounds, 2026-11-16)
+
+Android may hold or cut a background app's network, and a TV starts its screensaver after a few minutes with no input.
+So a game tells the library when its nearby screen leaves the front, and keeps the screen on while a room is open.
+
+- **Keep the screen on in the lobby and at the table** (host and joiner), and only there: set
+  `view.keepScreenOn = true` on those screens (in Compose, on `LocalView.current` inside a `DisposableEffect` that sets
+  it back to false), never on the menu. In the 2026-11-16 device round, a phone's screen timeout and a TV's screensaver
+  paused 10 of the 47 cases that ran.
+- **Host:** call `host.pause()` when the host's screen leaves the front (the app goes to the background or the screen
+  turns off) and `host.resume()` when it is back. While paused, the whole room clock stops: no seat goes to a bot, the
+  turn timer and planned bot moves wait, and join requests do not time out. Joiners see the host seat as not
+  connected. On `resume()` the turn timer, bot moves and requests carry on with the time they had left, and every away
+  joiner gets a fresh full reconnect window.
+- **Joiner:** call `client.pause()` and `client.resume()` (no argument; not `resume(saved)`) at the same points. While
+  paused the joiner keeps trying to reconnect, but its 2-minute retry time stops, so it does not give up while the
+  phone holds its network. After `resume()` the retry time counts on from where it stopped.
+- **Kept seat:** after `Ended(Unreachable)` the `SeatStore` keeps the seat. When the app comes back to the front,
+  offer "Back to your game" and call `client.resume(saved)`; the host gives the seat back, also after a bot played it.
+  A seat dropped more than 10 minutes ago is not tried: `resume(saved)` ends `Unreachable` at once and clears the
+  store.
+
+One way to wire the pause calls, in the screen that owns the room:
+
+```kotlin
+val owner = LocalLifecycleOwner.current
+DisposableEffect(owner) {
+    val observer = LifecycleEventObserver { _, event ->
+        when (event) {
+            Lifecycle.Event.ON_STOP -> scope.launch { host.pause() }   // joiner: client.pause()
+            Lifecycle.Event.ON_START -> scope.launch { host.resume() } // joiner: client.resume()
+            else -> Unit
+        }
+    }
+    owner.lifecycle.addObserver(observer)
+    onDispose { owner.lifecycle.removeObserver(observer) }
+}
+```
+
+These calls come with the version after v0.3.9. On v0.3.9 and older, a host in the background loses its joiners to
+bots after the reconnect window.
 
 ## Long Wi-Fi drops (measured 2026-11-14)
 
