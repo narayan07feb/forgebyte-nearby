@@ -24,6 +24,12 @@ Docs: `docs/ADAPTERS.md` (how a game uses the library), `docs/FAKE-PEER.md`, `do
 
 ## Open
 
+0. **App in the background or screen off: in review, waits for the device gate.** Draft PRs #62 (a joiner notices a
+   silent link, keeps its seat, and the seat expires after 10 min), #63 (host pause and resume stop the room clock)
+   and #64 (the `docs/ADAPTERS.md` part; it merges after them). The gate before ceo merges #62 and #63 is the
+   edge-matrix device round in a game test build: Home, screen off and link drops, on host and joiner, both ways.
+   Each case needs 10 PASS in a row (30 after any failure) and two clean rounds, each judged by a new fresh
+   reviewer. Round 6 (2026-11-18) gave 10 PASS, one per case. The next pass runs on two phones.
 1. **Device round: two phones and the Mac in one room.** One phone hosts a 3-seat room, the other phone and the Mac
    join, the host swaps each run, the phone joins by discovery and then by short code. No code change. Waits for a
    slot with the Lava on the network.
@@ -44,4 +50,3 @@ Docs: `docs/ADAPTERS.md` (how a game uses the library), `docs/FAKE-PEER.md`, `do
 - **Wi-Fi low-latency lock on the host during a match**: draft PR #26, closed 2026-11-12. The 2026-11-07 A/B phone
   run showed no clear gain (p50 125 ms with the lock against 134 ms without, p95 344 against 398, with a much wider
   spread), so ceo decided it does not merge. Do not start it again without new slow-move evidence and ceo's yes.
-- **Sony TV device tests**: the owner said on 2026-11-14 not to use the TV for now.
