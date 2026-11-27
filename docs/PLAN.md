@@ -210,6 +210,7 @@ never answers ends `Unreachable` with only commitments sent. Each connect and ea
 | Week 1 (3 Nov) | nearby | End-to-end encryption (owner moved it to now): P-256 ECDH + HKDF + AES-GCM, fingerprint in the code, check code for list joins; tag `0.2.0` (wire-incompatible with 0.1.0). Release blocker: no store release with nearby play without it |
 | Week 2 | nearby | Bot pacing + turn timer (owner, 3 Nov), tag `0.3.0` (wire-compatible with 0.2.0) |
 | Week 2 | nearby | Battery/heat check, Wi-Fi low-latency lock for slow moves, second real phone (test 4c) |
+| Week 2 (7 Nov) | nearby | "Make a network" (owner): opt-in Android-only artifact `nearby-hotspot`, local-only hotspot + Wi-Fi QR + join; design and test plan in [LOCAL-HOTSPOT.md](LOCAL-HOTSPOT.md). Parked by the owner (7 Nov); no game uses it |
 | Week 3 | nearby + games | iOS (Bonjour, Local network permission), Data safety, closed-test release |
 | Week 2 (7 Nov) | nearby | Seat back after a kill: `SeatStore` + `NearbyClient.resume` (ceo, 7 Nov); no rematch in a room, games open a new room to play again |
 

@@ -19,6 +19,9 @@ public data class SavedSeat(
     val gameId: String,
     val name: String,
     val token: String,
+    /** Wall-clock time (epoch ms) of the seat's last drop, or null while it is seated. A seat kept after Unreachable
+     *  expires 10 min after this (see [NearbyClient.resume]); an older saved value without it reads as null. */
+    val droppedAtMs: Long? = null,
 ) {
     /** One line of text for a key-value store; read it back with [parse]. */
     public fun toText(): String = NearbyProtocol.json.encodeToString(serializer(), this)
@@ -32,8 +35,10 @@ public data class SavedSeat(
 
 /**
  * Where a [NearbyClient] keeps its [SavedSeat]. The client saves the seat on every welcome (the token changes each
- * time) and clears it when the seat ends for good: the player left, was kicked or refused, the host left, or the room
- * could not be reached. A killed app does not clear it, so the next start can call [NearbyClient.resume].
+ * time), saves it again with [SavedSeat.droppedAtMs] when the link drops, and clears it when the seat ends for good:
+ * the player left, was kicked or refused, or the host left. After the room could not be reached it keeps the seat, as
+ * the host may still hold it; [NearbyClient.resume] skips a kept seat dropped more than 10 min ago, and clears it.
+ * A killed app does not clear it, so the next start can call [NearbyClient.resume].
  *
  * The default keeps it in memory only, so a killed app loses the seat (a bot plays it). To survive a kill, a game
  * passes a store backed by private app storage, and keeps that storage out of backups and device transfer: on
