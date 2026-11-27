@@ -19,23 +19,20 @@ ceo picks the order of the open items.
 | v0.3.7 | 2026-11-08 | Seat back after a kill, no endless Reconnecting, players stay players after the game |
 | v0.3.8 | 2026-11-10 | Hosts can approve code joins, a fake second player for debug builds (`nearby-testing`) |
 | v0.3.9 | 2026-11-14 | A joiner keeps its seat when a reconnect's Welcome is lost |
+| v0.3.10 | 2026-11-27 | A silent link is noticed, pause and resume stop the clocks, host IPv4 in discovery, opt-in `nearby-hotspot` |
 
 Docs: `docs/ADAPTERS.md` (how a game uses the library), `docs/FAKE-PEER.md`, `docs/DATA-SAFETY.md`.
 
 ## Open
 
-0. **App in the background or screen off: in review, waits for the device gate.** Draft PRs #62 (a joiner notices a
-   silent link, keeps its seat, and the seat expires after 10 min), #63 (host pause and resume stop the room clock)
-   and #64 (the `docs/ADAPTERS.md` part; it merges after them). The gate before ceo merges #62 and #63 is the
-   edge-matrix device round in a game test build: Home, screen off and link drops, on host and joiner, both ways.
-   Each case needs 10 PASS in a row (30 after any failure) and two clean rounds, each judged by a new fresh
-   reviewer. Round 6 (2026-11-18) gave 10 PASS, one per case. The next pass runs on two phones.
+0. **Device checks for v0.3.10 in a game test build** (PRs #62, #63 and #38, merged in #66): Home, screen off and
+   link drops on host and joiner both ways, and two Android 9 to 13 hosts named `Android.local`. They run in the
+   games' integration builds on v0.3.10. Each case needs 10 PASS in a row (30 after any failure) and two clean rounds,
+   each judged by a new fresh reviewer. Round 6 (2026-11-18, before the merge) gave 10 PASS, one per case.
 1. **Device round: two phones and the Mac in one room.** One phone hosts a 3-seat room, the other phone and the Mac
    join, the host swaps each run, the phone joins by discovery and then by short code. No code change. Waits for a
    slot with the Lava on the network.
-2. **Discovery when two Android 9 to 13 hosts share the name `Android.local`** (draft PR #38: the host lists its
-   IPv4 in the TXT record). Waits for a device slot with two such hosts.
-3. **Causes still UNEXPLAINED or UNVERIFIED** (see the Device test log in `docs/PLAN.md`):
+2. **Causes still UNEXPLAINED or UNVERIFIED** (see the Device test log in `docs/PLAN.md`):
    - run 12: a joiner got no view after the start (no trace; every socket order with one or two joiners passes, so
      what is left is transport or timing);
    - the 267 s leave (now bounded to 10 s);
@@ -43,9 +40,10 @@ Docs: `docs/ADAPTERS.md` (how a game uses the library), `docs/FAKE-PEER.md`, `do
 
 ## Parked
 
-- **iOS** (Bonjour, Local network permission): draft PR #24, Kotlin 2.3.20. Parked by ceo until after Android
-  production.
-- **In-app hotspot** ("Make a network"): draft PR #36, parked by the owner on 2026-11-07. Games show the "No Wi-Fi?"
+- **iOS** (Bonjour, Local network permission): draft PR #24, Kotlin 2.3.20. Parked until after Android production
+  (owner 2026-11-27: "no ios for now"); it needs the games on Kotlin 2.3.x and AGP 8.11+ first.
+- **In-app hotspot** ("Make a network"): opt-in artifact `nearby-hotspot` from v0.3.10 (#36), parked by the owner on
+  2026-11-07; no game uses it. Games show the "No Wi-Fi?"
   help text from `docs/ADAPTERS.md` instead.
 - **Wi-Fi low-latency lock on the host during a match**: draft PR #26, closed 2026-11-12. The 2026-11-07 A/B phone
   run showed no clear gain (p50 125 ms with the lock against 134 ms without, p95 344 against 398, with a much wider
