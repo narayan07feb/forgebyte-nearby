@@ -36,7 +36,7 @@ import kotlin.time.TimeSource
  * Returns true when the match reached the end.
  */
 public suspend fun playAsJoiner(
-    code: JoinCode?, name: String, thinkMs: Long, short: ShortCode? = null,
+    code: JoinCode?, name: String, thinkMs: Long, short: ShortCode? = null, findRoom: String? = null,
     seatStore: SeatStore = InMemorySeatStore(), resume: Boolean = false,
     onClient: (NearbyClient<DemoMove, DemoView>) -> Unit = {}, say: (String) -> Unit,
 ): Boolean {
@@ -59,9 +59,14 @@ public suspend fun playAsJoiner(
             say("asking to join with short code $short")
             client.requestJoin(short, name)
         } else {
-            say("looking for rooms on the local network")
+            say("looking for ${findRoom?.let { "the room '$it'" } ?: "rooms"} on the local network")
+            var seen = ""
             val room = withTimeoutOrNull(30.seconds) {
-                discoverRooms(DemoGame.ID).mapNotNull { rooms -> rooms.firstOrNull { it.canJoin(DemoGame.VERSION) } }.first()
+                discoverRooms(DemoGame.ID).mapNotNull { rooms ->
+                    val now = rooms.joinToString { "'${it.roomName}' at ${it.host}:${it.port}" }
+                    if (now != seen && rooms.isNotEmpty()) say("rooms seen: $now").also { seen = now }
+                    rooms.firstOrNull { it.canJoin(DemoGame.VERSION) && (findRoom == null || it.roomName == findRoom) }
+                }.first()
             } ?: return false.also { say("FAIL no room found in 30 s") }
             say("found '${room.roomName}' at ${room.host}:${room.port} after ${start.elapsedNow()}; asking to join")
             client.requestJoin(room, name)
