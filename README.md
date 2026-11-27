@@ -16,7 +16,7 @@ Modules: `nearby` (the library), `nearby-testing` (test helpers), `sample-host` 
 (desktop test client), `demo` (a small sample implementation).
 
 Status: released (see the tags). Plan and test log: [docs/PLAN.md](docs/PLAN.md). Done, open and parked work:
-[docs/ROADMAP.md](docs/ROADMAP.md).
+[docs/ROADMAP.md](docs/ROADMAP.md). Version numbers and release steps: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Privacy
 
