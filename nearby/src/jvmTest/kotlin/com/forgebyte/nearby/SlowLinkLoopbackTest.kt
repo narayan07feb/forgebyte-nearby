@@ -47,6 +47,17 @@ class SlowLinkLoopbackTest {
         val port: Int = server.localPort
         val connections = AtomicInteger()
         @Volatile private var stalledUntil = 0L
+        @Volatile private var holdNewUntil = 0L
+        private val open = java.util.concurrent.CopyOnWriteArrayList<Socket>()
+
+        /**
+         * The host's side goes away for [ms]: every open link is closed, and new connects are accepted but never
+         * answered (no forward, no close) until then, as when the host's app drops its links and its port hangs.
+         */
+        fun dropAndHold(ms: Long) {
+            holdNewUntil = System.currentTimeMillis() + ms
+            open.forEach { runCatching { it.close() } }
+        }
 
         /** Nothing moves in either direction for [ms], as when Wi-Fi hangs without dropping. */
         fun stall(ms: Long) {
@@ -57,7 +68,9 @@ class SlowLinkLoopbackTest {
             thread(isDaemon = true) {
                 while (true) {
                     val joiner = runCatching { server.accept() }.getOrNull() ?: break
+                    if (System.currentTimeMillis() < holdNewUntil) continue // accepted, never answered
                     connections.incrementAndGet()
+                    open += joiner
                     val toHost = Socket(InetAddress.getLoopbackAddress(), target)
                     pump(joiner, toHost)
                     pump(toHost, joiner)
@@ -142,6 +155,49 @@ class SlowLinkLoopbackTest {
             val took = match(relay)
             // Each joiner move is at least one view and one move across the relay, 20 ms each way, and at least 15 happen.
             assertTrue(took >= 600, "the relay did not slow the game: $took ms")
+        }
+    }
+
+    /**
+     * A link that goes silent with no FIN (Wi-Fi lost while the socket stays up): the joiner's own pings get no pong, so
+     * it must notice within its ping timeout (10 s) and go Reconnecting, not sit on Connected until the link comes back
+     * (16 Nov device run, a stall probe in a game test build: the joiner stayed Connected for the whole 45 s stall).
+     */
+    @Test
+    fun givenASeatedJoiner_whenTheLinkGoesSilentWithNoFin_thenItReconnectsWithinItsPingTimeout() = runBlocking<Unit> {
+        withTimeout(60.seconds) {
+            val relay = DelayRelay(host.open(bindHost = LOOPBACK), 0..0)
+            val client = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope)
+            client.join(JoinCode(LOOPBACK, relay.port, Harness.SECRET, host.fingerprint!!), "P1")
+            client.status.first { it == ClientStatus.Connected }
+            val stalled = TimeSource.Monotonic.markNow()
+            relay.stall(40_000)
+            val seen = withTimeoutOrNull(25.seconds) { client.status.first { it == ClientStatus.Reconnecting } }
+            assertTrue(seen != null, "the joiner sat on ${client.status.value} for 25 s on a silent link")
+            val after = stalled.elapsedNow()
+            assertTrue(after >= 5.seconds, "the joiner gave up on a link that was quiet only $after")
+            client.leave()
+        }
+    }
+
+    /**
+     * The host side drops the link and, for 20 s, accepts new connects without answering them (16 Nov device run: the
+     * joiner never got back after a 30 s host-side drop). Each reconnect attempt must have its own time limit, so the
+     * joiner is back soon after the host answers again, not after its whole 120 s retry time. 20 s keeps it inside the
+     * test room's 30 s seat window.
+     */
+    @Test
+    fun givenADroppedJoiner_whenTheHostPortHangsForTwentySeconds_thenItIsBackSoonAfter() = runBlocking<Unit> {
+        withTimeout(90.seconds) {
+            val relay = DelayRelay(host.open(bindHost = LOOPBACK), 0..0)
+            val client = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope)
+            client.join(JoinCode(LOOPBACK, relay.port, Harness.SECRET, host.fingerprint!!), "P1")
+            client.status.first { it == ClientStatus.Connected }
+            relay.dropAndHold(20_000)
+            client.status.first { it == ClientStatus.Reconnecting }
+            val back = withTimeoutOrNull(35.seconds) { client.status.first { it == ClientStatus.Connected } }
+            assertTrue(back != null, "the joiner was still ${client.status.value} 35 s after a 20 s hang (15 s after the host answered again)")
+            client.leave()
         }
     }
 
