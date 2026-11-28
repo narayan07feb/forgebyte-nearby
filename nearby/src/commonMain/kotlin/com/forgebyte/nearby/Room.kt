@@ -1,7 +1,5 @@
 package com.forgebyte.nearby
 
-import kotlin.coroutines.cancellation.CancellationException
-
 /** The connection id the host's own seat uses. The transport delivers these messages on the host phone itself. */
 public const val HOST_CONN: String = "host"
 
@@ -53,9 +51,9 @@ public class RoomConfig(
  * Someone asking to join. The host's screen shows [checkCode] next to the name; the joiner's screen shows its own.
  * Accept only when they match: a different code means someone on the network sits between the two phones.
  *
- * [id] names this request on this connection. A retry of the same join that moves the request to a new connection gets
- * a new [id] (and a new [checkCode]; before v0.4.0 the id stayed), in the same place in the list, so an answer for what the host saw before cannot
- * reach the new connection. Answer with both: `acceptRequest(id, checkCode)` or `declineRequest(id, checkCode)`.
+ * A retry of the same join can move the request to a new connection with a new [checkCode] under the same [id]. Answer
+ * with both values from the same [JoinRequest] (`acceptRequest(id, checkCode)`), so an answer for the code the host
+ * compared never reaches a connection whose code it did not see.
  */
 public data class JoinRequest(val id: Int, val name: String, val checkCode: String)
 
@@ -81,7 +79,7 @@ public class Room<S, M, V>(
     private val config: RoomConfig,
     private val clock: () -> Long,
     private val newToken: () -> String = ::secureToken,
-    /** The check code of a connection's encrypted channel, shown with its join request. If it throws, that connection is closed. */
+    /** The check code of a connection's encrypted channel, shown with its join request. */
     private val checkCodeOf: (conn: String) -> String = { "" },
 ) {
     private class Seat(var name: String, var kind: SeatKind, var conn: String?) {
@@ -96,10 +94,7 @@ public class Room<S, M, V>(
         var heldToken: String? = null
     }
 
-    /** [ids]: every id this request had (a retry that moves it gets a new one); only the deprecated id-only answers use it. */
-    private class Pending(var id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?) {
-        val ids = mutableSetOf(id)
-    }
+    private class Pending(val id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?)
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -216,37 +211,34 @@ public class Room<S, M, V>(
     }
 
     /**
-     * Accepts request [id] only while it still shows [checkCode], the code the host compared. Otherwise (the request is
-     * gone, timed out, or moved to a new connection with a new id) it answers nothing; like every room call, it still
-     * times out old requests first (not while [isPaused]).
+     * Accepts request [id] only while it still shows [checkCode], the code the host compared; otherwise it answers
+     * nothing. Like every room call it first times out old requests (not while [isPaused]).
      */
     public fun acceptRequest(id: Int, checkCode: String): List<RoomOutput> = answerRequest(id, checkCode, accept = true).first
 
     /** Declines request [id] only while it still shows [checkCode]; see [acceptRequest]. */
     public fun declineRequest(id: Int, checkCode: String): List<RoomOutput> = answerRequest(id, checkCode, accept = false).first
 
-    /** The outputs, and whether this call took request [id] showing [checkCode] off the list (known per call). */
+    /** The outputs, and whether this call took request [id] showing [checkCode] off the list. */
     internal fun answerRequest(id: Int, checkCode: String, accept: Boolean): Pair<List<RoomOutput>, Boolean> {
         var took = false
         val outputs = step {
-            takeRequest(id, checkCode)?.let {
-                took = true
-                if (accept) seat(it) else decline(it)
-            }
+            val p = pending.find { it.id == id && it.checkCode == checkCode } ?: return@step
+            pending.remove(p)
+            took = true
+            if (accept) seat(p) else decline(p)
         }
         return outputs to took
     }
 
-    /** By id alone, as before: also by any id the request had before a retry moved it. */
     @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")
     public fun acceptJoin(id: Int): List<RoomOutput> = step {
-        takeRequestById(id)?.let(::seat)
+        takeRequest(id)?.let(::seat)
     }
 
-    /** By id alone, as before; see [acceptJoin]. */
     @Deprecated("Does not check the code the host compared. Use declineRequest(id, checkCode).")
     public fun declineJoin(id: Int): List<RoomOutput> = step {
-        takeRequestById(id)?.let(::decline)
+        takeRequest(id)?.let(::decline)
     }
 
     private fun seat(p: Pending) {
@@ -284,19 +276,13 @@ public class Room<S, M, V>(
     }
 
     private inline fun step(block: () -> Unit): List<RoomOutput> {
-        // Each call has its own list: a room call made from a callback (a game's newGame) keeps the outer call's outputs.
-        val outer = out
         out = mutableListOf()
-        try {
-            if (phase != Phase.CLOSED) {
-                expireDropped()
-                fireDue()
-                block()
-            }
-            return out
-        } finally {
-            out = outer
+        if (phase != Phase.CLOSED) {
+            expireDropped()
+            fireDue()
+            block()
         }
+        return out
     }
 
     private fun hello(conn: String, h: ClientMsg.Hello) {
@@ -323,47 +309,26 @@ public class Room<S, M, V>(
             // A retry of a join whose first socket died before its Welcome: same seat, or same request, again.
             val seat = seats.indexOfFirst { t -> t.joinId?.let { sameSecret(it, h.joinId) } == true }
             if (seat >= 0) return reseat(seat, conn)
-            val sameJoin = { p: Pending -> p.joinId?.let { sameSecret(it, h.joinId) } == true }
-            if (pending.any(sameJoin)) {
-                val code = codeOf(conn) ?: return // first: without a code the request stays as it was
-                // Looked up again: a checkCodeOf that called back into the room may have answered it meanwhile.
-                val p = pending.firstOrNull(sameJoin) ?: return newRequest(conn, h, code)
+            pending.firstOrNull { p -> p.joinId?.let { sameSecret(it, h.joinId) } == true }?.let { p ->
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
-                p.checkCode = code
-                p.id = nextRequest++ // an answer for the old connection must not reach this one
-                p.ids += p.id
+                p.checkCode = checkCodeOf(conn)
                 if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
             }
         }
-        if (h.roomSecret == null || config.approveCodeJoins) return newRequest(conn, h, code = null)
         if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
         if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
+        if (h.roomSecret == null || config.approveCodeJoins) { // the secret, if any, was checked above
+            if (pending.size >= config.maxPendingRequests) {
+                return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
+            }
+            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn), h.joinId)
+            if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
+            return
+        }
         seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn).apply { joinId = h.joinId }
         welcome(seats.lastIndex)
-    }
-
-    /** A join request that waits for the host ([code]: the connection's check code, when already read). */
-    private fun newRequest(conn: String, h: ClientMsg.Hello, code: String?) {
-        if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
-        if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
-        if (pending.size >= config.maxPendingRequests) {
-            return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
-        }
-        val shown = code ?: codeOf(conn) ?: return
-        pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), shown, h.joinId)
-        if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
-    }
-
-    /** [checkCodeOf] for [conn]; when it fails, the connection is closed (no request can show it) and this is null. */
-    private fun codeOf(conn: String): String? = try {
-        checkCodeOf(conn)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        out += RoomOutput.Close(conn)
-        null
     }
 
     /** The seat's player is back on [conn] (with their token, or their join id before any Welcome). */
@@ -387,12 +352,7 @@ public class Room<S, M, V>(
         }
     }
 
-    private fun takeRequest(id: Int, checkCode: String): Pending? =
-        take(pending.find { it.id == id && it.checkCode == checkCode })
-
-    private fun takeRequestById(id: Int): Pending? = take(pending.find { it.id == id } ?: pending.find { id in it.ids })
-
-    private fun take(p: Pending?): Pending? = p?.also { pending.remove(it) }
+    private fun takeRequest(id: Int) = pending.find { it.id == id }?.also { pending.remove(it) }
 
     private fun refuseAllRequests(reason: RefuseReason, message: String) {
         pending.forEach { refuse(it.conn, reason, message) }

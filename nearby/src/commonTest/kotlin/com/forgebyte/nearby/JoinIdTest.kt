@@ -56,12 +56,12 @@ class JoinIdTest {
     }
 
     @Test
-    fun givenRequestWaiting_whenRetryArrivesBeforeTheOldSocketIsNoticedDead_thenOneEntryNewIdAndApprovalReachesTheRetry() {
+    fun givenRequestWaiting_whenRetryArrivesBeforeTheOldSocketIsNoticedDead_thenOneEntrySameIdAndApprovalReachesTheRetry() {
         h.request("a", name = "Asha", joinId = "J1")
         val out = h.request("a2", name = "Asha", joinId = "J1")
         assertTrue(out.closed("a"), "the old half-open socket is closed")
-        assertEquals(listOf(2), room.joinRequests.map { it.id }, "one entry, with a new id for the new connection")
-        val accepted = h.accept(2)
+        assertEquals(listOf(1), room.joinRequests.map { it.id }, "one entry, same id")
+        val accepted = h.accept(1)
         assertEquals(1, accepted.welcome("a2").lobby.yourSeat)
         assertEquals(listOf("Host", "Asha"), room.hostLobby.seats.map { it.name })
     }
