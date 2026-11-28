@@ -10,6 +10,7 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
@@ -110,8 +111,6 @@ public class NearbyClient<M, V>(
     /** Completes when the HTTP client is closed; tests check teardown with it. */
     internal val httpClosed: Job get() = http.coroutineContext[Job]!!
 
-    /** The connect loop now running; an offline leave() cancels it. */
-    @Volatile private var connectJob: Job? = null
     /** The token of the seat this client last saved; the store is changed for this client only while it holds it. */
     @Volatile private var savedToken: String? = null
     @Volatile private var lastSeq = 0
@@ -180,11 +179,13 @@ public class NearbyClient<M, V>(
         val droppedAt = seat.droppedAtMs
         if (droppedAt != null && wallClock() - droppedAt > keptSeatFor.inWholeMilliseconds) {
             trace("joiner: kept seat dropped ${wallClock() - droppedAt} ms ago; not resumed")
-            // Only this exact record: a newer save of the same seat (another drop time) is not expired.
-            if (seatStore.load() == seat) seatStore.clear()
-            _status.value = ClientStatus.Ended(EndReason.Unreachable)
             http.close()
-            return Job().apply { complete() }
+            // Under the store lock, and only this exact record: a newer save of the same seat is not expired. It runs at
+            // once when the lock is free, so Ended is set before resume() returns in the usual case.
+            return scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                seatLock.withLock { if (seatStore.load() == seat) seatStore.clear() }
+                _status.value = ClientStatus.Ended(EndReason.Unreachable)
+            }
         }
         return connect(seat.host, seat.port, secret = null, fingerprint = seat.fingerprint, seat.name, resumeToken = seat.token)
     }
@@ -208,8 +209,14 @@ public class NearbyClient<M, V>(
      */
     private fun connect(
         host: String, port: Int, secret: String?, fingerprint: String?, name: String, resumeToken: String? = null,
+    ): Job {
+        savedToken = resumeToken // before the job starts, so an immediate leave() knows which seat is this client's
+        return launchConnect(host, port, secret, fingerprint, name, resumeToken)
+    }
+
+    private fun launchConnect(
+        host: String, port: Int, secret: String?, fingerprint: String?, name: String, resumeToken: String?,
     ): Job = scope.launch {
-        savedToken = resumeToken
         val started = TimeSource.Monotonic.markNow()
         val joinId = secureRandomBytes(16).toHex() // one per join, kept across retries until the Welcome
         var pinned = fingerprint // after the first join, every reconnect must reach the same room key
@@ -339,10 +346,7 @@ public class NearbyClient<M, V>(
             _status.value = if (token == null) ClientStatus.Connecting else ClientStatus.Reconnecting
             delay(1_000)
         }
-    }.also { job ->
-        connectJob = job
-        job.invokeOnCompletion { http.close() } // also when the app cancels it (see the class KDoc)
-    }
+    }.also { job -> job.invokeOnCompletion { http.close() } } // also when the app cancels it (see the class KDoc)
 
     /** Writes [seat] only while the store still holds the seat this client saved (see the class KDoc). */
     private suspend fun saveIfMine(seat: SavedSeat) = seatLock.withLock {
@@ -411,12 +415,12 @@ public class NearbyClient<M, V>(
             link?.also { runCatching { it.socket.send(Frame.Binary(true, it.secure.seal(NearbyProtocol.encode(ClientMsg.Leave)))) } }
         }
         if (l != null) {
-            l.socket.flush()
-            l.socket.close() // the connect loop then ends Left
-            return
+            // A dead link can fail the flush: then the client ends itself below.
+            if (runCatching { l.socket.flush(); l.socket.close() }.isSuccess) return // the connect loop then ends Left
         }
-        // No link: the host cannot be told, and no hello goes out any more (see the connect loop). End here.
-        connectJob?.cancel()
+        // No link, or a dead one: the host cannot be told, and no hello goes out any more (see the connect loop). Closing
+        // the HTTP client also ends the loop: its next attempt fails at once and it ends Left.
+        http.close()
         clearIfMine()
         _status.value = ClientStatus.Ended(EndReason.Left)
     }

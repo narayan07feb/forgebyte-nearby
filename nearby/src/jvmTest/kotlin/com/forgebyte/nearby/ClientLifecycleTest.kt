@@ -41,12 +41,17 @@ class ClientLifecycleTest {
         private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
         val port: Int = server.localPort
         @Volatile var closed = false
+        /** Connections the gate took, refused or not. */
+        val accepted = java.util.concurrent.atomic.AtomicInteger()
+        /** While set, both directions drop every byte but keep the sockets open: a link that went silent. */
+        @Volatile var silent = false
         private val sockets = java.util.Collections.synchronizedList(mutableListOf<Socket>())
 
         init {
             thread(isDaemon = true) {
                 while (true) {
                     val joiner = runCatching { server.accept() }.getOrNull() ?: break
+                    accepted.incrementAndGet()
                     if (closed) { runCatching { joiner.close() }; continue }
                     val toHost = Socket(InetAddress.getLoopbackAddress(), target)
                     sockets += listOf(joiner, toHost)
@@ -57,7 +62,14 @@ class ClientLifecycleTest {
         }
 
         private fun pump(from: Socket, to: Socket) = thread(isDaemon = true) {
-            runCatching { from.getInputStream().copyTo(to.getOutputStream()) }
+            runCatching {
+                val buf = ByteArray(4096)
+                while (true) {
+                    val n = from.getInputStream().read(buf)
+                    if (n < 0) break
+                    if (!silent) to.getOutputStream().write(buf, 0, n)
+                }
+            }
             runCatching { to.close() }
             runCatching { from.close() }
         }
@@ -146,9 +158,38 @@ class ClientLifecycleTest {
             assertEquals(ClientStatus.Ended(EndReason.Left), end)
             withTimeoutOrNull(5.seconds) { c.httpClosed.join() } ?: error("the client was never closed")
             assertTrue(t0.elapsedNow() < 500.milliseconds, "closed ${t0.elapsedNow()} after leave(), the retry wait is 1 s")
+            val tries = gate.accepted.get()
+            delay(1_500) // longer than the retry wait
+            assertEquals(tries, gate.accepted.get(), "no connect attempt after leave()")
         } finally {
             traceSink = null
         }
+    }
+
+    @Test
+    fun givenAResumeJustStarted_whenThePlayerLeavesAtOnce_thenTheResumedSeatIsCleared() = runBlocking<Unit> {
+        val gate = Gate(host.open(bindHost = LOOPBACK)).also { gates += it }
+        gate.closed = true // the host is out of reach, so the resume is still trying
+        val seat = SavedSeat(LOOPBACK, gate.port, host.fingerprint!!, "fake", "Asha", "resumed-token")
+        val store = InMemorySeatStore().apply { save(seat) }
+        val c = client(store)
+        val job = c.resume(seat)
+        c.leave()
+        assertTrue(withTimeoutOrNull(5.seconds) { job.join() } != null, "the resume job ended")
+        assertEquals(ClientStatus.Ended(EndReason.Left), c.status.value)
+        assertEquals(null, store.load(), "the seat the client resumed is its own, so leaving clears it")
+    }
+
+    @Test
+    fun givenASilentLink_whenThePlayerLeaves_thenLeaveReturnsSoonAndTheClientEndsLeft() = runBlocking<Unit> {
+        val gate = Gate(host.open(bindHost = LOOPBACK)).also { gates += it }
+        val c = client(InMemorySeatStore())
+        c.joinedVia(gate.port)
+        gate.silent = true // the link looks up, but nothing gets through any more
+        val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+        withTimeoutOrNull(8.seconds) { c.leave() } ?: error("leave() did not return on a silent link")
+        assertTrue(t0.elapsedNow() < 5.seconds, "leave() took ${t0.elapsedNow()}")
+        assertEquals(ClientStatus.Ended(EndReason.Left), withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } })
     }
 
     @Test
