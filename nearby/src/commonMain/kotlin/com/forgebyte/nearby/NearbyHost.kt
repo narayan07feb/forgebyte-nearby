@@ -102,8 +102,8 @@ public class NearbyHost<S, M, V>(
      * the room; after [leave] it binds nothing and throws [CancellationException].
      */
     public suspend fun open(port: Int = 0, bindHost: String = "0.0.0.0"): Int = lifeLock.withLock {
-        if (left) throw CancellationException("the room was left before it opened")
         check(!opened) { "open() was already called on this host" }
+        if (left) throw CancellationException("the room was left before it opened")
         opened = true
         hostKey = HostKey.create() // new for this room, kept only in memory
         val server = embeddedServer(CIO, port = port, host = bindHost) {
@@ -221,21 +221,17 @@ public class NearbyHost<S, M, V>(
     public suspend fun resume(): Unit = act { resume() }
 
     /** Ends the room for everyone, then stops the server. */
-    public suspend fun leave() {
+    public suspend fun leave(): Unit = withContext(NonCancellable) { // a cancelled caller still gets the whole close
         lifeLock.withLock { left = true } // waits for an open() still running; one after this binds nothing
         val t0 = TimeSource.Monotonic.markNow()
-        try {
-            act { hostLeave() }
-            jobs.forEach { it.cancel() }
-            trace("host: leave: room closed sent (${t0.elapsedNow()})")
-            // Let every socket send "room closed" before the server goes, or joiners would take it for a drop.
-            val pending = lock.withLock { writers.toList() }
-            val flushed = withTimeoutOrNull(FLUSH) { pending.joinAll() } != null
-            trace("host: leave: ${pending.size} writers ${if (flushed) "flushed" else "NOT flushed"} (${t0.elapsedNow()})")
-        } finally {
-            // Even if the caller is cancelled meanwhile: once left, the server stops.
-            withContext(NonCancellable) { jobs.forEach { it.cancel() }; stopServer?.invoke() }
-        }
+        act { hostLeave() }
+        jobs.forEach { it.cancel() }
+        trace("host: leave: room closed sent (${t0.elapsedNow()})")
+        // Let every socket send "room closed" before the server goes, or joiners would take it for a drop.
+        val pending = lock.withLock { writers.toList() }
+        val flushed = withTimeoutOrNull(FLUSH) { pending.joinAll() } != null
+        trace("host: leave: ${pending.size} writers ${if (flushed) "flushed" else "NOT flushed"} (${t0.elapsedNow()})")
+        stopServer?.invoke()
         trace("host: leave: server stopped (${t0.elapsedNow()})")
     }
 

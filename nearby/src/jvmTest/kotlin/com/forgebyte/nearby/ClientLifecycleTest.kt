@@ -123,6 +123,54 @@ class ClientLifecycleTest {
     }
 
     @Test
+    fun givenAKickedClient_whenTheAppCancelsJustBeforeTheClear_thenTheSavedSeatStays() = runBlocking<Unit> {
+        val store = InMemorySeatStore()
+        val c = client(store)
+        val job = c.joinedVia(host.open(bindHost = LOOPBACK))
+        val saved = store.load() ?: error("no seat saved on the Welcome")
+        // The last line before the clear: a cancel here finds the seat lock free, so only the check under it stops the clear.
+        traceSink = { if (it.startsWith("joiner: ended")) job.cancel() }
+        try {
+            host.kick(1)
+            assertTrue(withTimeoutOrNull(10.seconds) { job.join() } != null, "the join Job ended")
+        } finally {
+            traceSink = null
+        }
+        assertEquals(saved, store.load(), "a cancelled client keeps its seat")
+    }
+
+    @Test
+    fun givenTheWelcomeSaveFails_whenTheClientRetries_thenTheTokenOnDiskStillResumes() = runBlocking<Unit> {
+        // Saves of a rotated token fail; a drop stamp (same token) still works.
+        val store = object : SeatStore {
+            val inner = InMemorySeatStore()
+            @Volatile var failNewTokens = false
+            val failed = java.util.concurrent.atomic.AtomicInteger()
+            override fun load() = inner.load()
+            override fun save(seat: SavedSeat) {
+                if (failNewTokens && seat.token != inner.load()?.token) { failed.incrementAndGet(); error("disk full") }
+                inner.save(seat)
+            }
+            override fun clear() = inner.clear()
+        }
+        val c = client(store)
+        val job = c.joinedVia(host.open(bindHost = LOOPBACK))
+        val onDisk = store.load() ?: error("no seat saved on the Welcome")
+        store.failNewTokens = true
+        c.dropForTest()
+        // Two failed Welcome saves: the first reconnect and its retry, which must still present the token on disk.
+        assertTrue(withTimeoutOrNull(15.seconds) { while (store.failed.get() < 2) delay(50) } != null, "two Welcomes came")
+        job.cancelAndJoin()
+        val stored = store.load() ?: error("the seat was cleared")
+        assertEquals(onDisk.token, stored.token, "no rotated token was saved, only the drop stamp")
+        store.failNewTokens = false
+        val again = client(store)
+        again.resume(stored)
+        val st = withTimeoutOrNull(10.seconds) { again.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended } }
+        assertEquals(ClientStatus.Connected, st, "the token on disk still holds the seat")
+    }
+
+    @Test
     fun givenANewerSeatInTheStore_whenThisClientsLinkDrops_thenItDoesNotOverwriteTheNewerSeat() = runBlocking<Unit> {
         val store = InMemorySeatStore()
         val gate = Gate(host.open(bindHost = LOOPBACK)).also { gates += it }
@@ -144,6 +192,26 @@ class ClientLifecycleTest {
         c.resume(otherSeat.copy(token = "old-token", droppedAtMs = 0)).join()
         assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.value)
         assertEquals(otherSeat, store.load(), "the expired seat is not the one in the store")
+    }
+
+    @Test
+    fun givenTheStoreHoldsTheSameSeatWithANewerDrop_whenAnOlderCopyIsResumedExpired_thenTheStoreKeepsIt() = runBlocking<Unit> {
+        val newer = otherSeat.copy(droppedAtMs = 99 * 60_000L)
+        val store = InMemorySeatStore().apply { save(newer) }
+        val c = client(store)
+        c.wallClock = { 100 * 60_000L }
+        c.resume(otherSeat.copy(droppedAtMs = 0)).join() // same token, an older drop: this copy expired
+        assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.value)
+        assertEquals(newer, store.load(), "only the exact expired record is cleared")
+    }
+
+    @Test
+    fun givenNoLocalAddress_whenAShortCodeJoinEnds_thenTheClientIsClosed() = runBlocking<Unit> {
+        val c = client(InMemorySeatStore())
+        c.myAddresses = { emptyList() }
+        c.requestJoin(ShortCode.of("192.0.2.7", 4000)!!, "Asha").join() // a documentation address, never reached
+        assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.value)
+        assertTrue(withTimeoutOrNull(5.seconds) { c.httpClosed.join() } != null, "the HTTP client is closed")
     }
 
     @Test

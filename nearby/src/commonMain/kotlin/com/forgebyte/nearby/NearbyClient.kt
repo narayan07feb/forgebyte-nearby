@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -183,7 +184,7 @@ public class NearbyClient<M, V>(
             // Under the store lock, and only this exact record: a newer save of the same seat is not expired. It runs at
             // once when the lock is free, so Ended is set before resume() returns in the usual case.
             return scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                seatLock.withLock { if (seatStore.load() == seat) seatStore.clear() }
+                seatLock.withLock { if (isActive && seatStore.load() == seat) seatStore.clear() } // cancelled: keep it
                 _status.value = ClientStatus.Ended(EndReason.Unreachable)
             }
         }
@@ -286,14 +287,16 @@ public class NearbyClient<M, V>(
                         val msg = NearbyProtocol.decodeHost(text) ?: continue
                         if (msg is HostMsg.Welcome) {
                             trace("joiner: welcome, seat ${msg.lobby.yourSeat}")
-                            token = msg.reconnectToken
-                            droppedAt = null
-                            saved = SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken)
+                            val seat = SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken)
                             seatLock.withLock {
                                 currentCoroutineContext().ensureActive() // a cancelled client saves nothing
-                                seatStore.save(saved!!)
+                                seatStore.save(seat)
                                 savedToken = msg.reconnectToken
                             }
+                            // Only after the save: if it throws, the next retry still uses the token that is on disk.
+                            token = msg.reconnectToken
+                            droppedAt = null
+                            saved = seat
                             welcomed = true // only now: a move or ready makes the host drop the old token
                         }
                         end = handle(msg)
@@ -344,6 +347,7 @@ public class NearbyClient<M, V>(
     }
 
     private suspend fun clearIfMine() = seatLock.withLock {
+        currentCoroutineContext().ensureActive() // a cancelled client keeps its seat (see the class KDoc)
         if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.clear()
     }
 
