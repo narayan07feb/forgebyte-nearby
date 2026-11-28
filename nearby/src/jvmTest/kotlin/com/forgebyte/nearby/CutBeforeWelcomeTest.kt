@@ -198,22 +198,24 @@ class CutBeforeWelcomeTest {
     }
 
     @Test
-    fun givenRequestJoin_whenFirstSocketDiesWhileHostDecides_thenOneEntryAndApprovalReachesTheRetry() = runBlocking<Unit> {
+    fun givenRequestJoin_whenFirstSocketDiesWhileHostDecides_thenTheOldPairTakesNothingAndTheRetryIsApproved() = runBlocking<Unit> {
         val port = host.open(bindHost = LOOPBACK)
-        val relay = CutRelay(port).also { relays += it }
+        val relay = CutRelay(port, holdRetry = true).also { relays += it }
         val c = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope)
         c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, relay.port), "Asha")
         val first = withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.isNotEmpty() } }?.single() ?: error("no request")
         relay.cutFirst() // the host is still deciding
-        // The retry's request, not the first one: another id, and the code the joiner shows now.
-        val requests = withTimeoutOrNull(15.seconds) {
-            host.joinRequests.first { r -> r.size == 1 && r[0].id != first.id && r[0].checkCode == c.checkCode.value }
-        } ?: error("no retry: ${c.status.value} ${host.joinRequests.value}")
-        assertEquals(1, host.joinRequests.value.size, "the approval list shows Asha once: ${host.joinRequests.value}")
-        val request = host.joinRequests.value.single()
+        // The host notices the drop before the retry gets through: the relay holds the retry until the list is empty.
+        withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.isEmpty() } } ?: error("the drop was not noticed")
+        assertTrue(relay.retryHeld.await(15, java.util.concurrent.TimeUnit.SECONDS), "the joiner retried")
+        assertFalse(host.acceptRequest(first.id, first.checkCode))
+        assertFalse(host.declineRequest(first.id, first.checkCode))
+        relay.releaseRetry.countDown()
+        val request = withTimeoutOrNull(15.seconds) { host.joinRequests.first { it.isNotEmpty() } }?.single() ?: error("no retry request")
+        assertTrue(request.id != first.id, "the retry is a new request")
         assertTrue(host.acceptRequest(request.id, request.checkCode))
         val status = withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended } }
-        assertEquals(ClientStatus.Connected, status, "the approval reached the retried connection (first entry was ${requests.single()})")
+        assertEquals(ClientStatus.Connected, status, "the approval reached the retried connection")
         assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name })
     }
 
@@ -232,7 +234,9 @@ class CutBeforeWelcomeTest {
         joiner().requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, port), "Bo")
         val bo = withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.size == 2 } }?.get(1) ?: error("no second request")
         relay.cutFirstJoinerSide()
-        // The retry moves Asha's request in place: same id, the new connection's code (six digits: equal 1 in a million).
+        // The retry moves Asha's request in place: same id, the new connection's code. (If the six digits came out
+        // equal, 1 in a million, the room drops the request instead and this wait times out.) That the code is
+        // compared inside the room step is shown by the Room tests and the mutants, not by this order.
         val moved = withTimeoutOrNull(15.seconds) {
             host.joinRequests.first { r -> r.size == 2 && r[0].id == seen.id && r[0].checkCode != seen.checkCode }
         }?.first() ?: error("no retry: ${host.joinRequests.value}")
@@ -339,7 +343,7 @@ class CutBeforeWelcomeTest {
 
     // Failed before the held token (10 Nov): the second retry was told "Your seat is gone".
     @Test
-    fun givenReconnect_whenItsWelcomeIsLost_thenTheNextRetryKeepsTheSeat() = runBlocking<Unit> {
+    fun givenReconnect_whenItsWelcomeIsLost_thenALaterRetryKeepsTheSeat() = runBlocking<Unit> {
         val relay = CutRelay(host.open(bindHost = LOOPBACK), cutOn = 1).also { relays += it }
         val c = joiner()
         c.joinAndWait(relay)

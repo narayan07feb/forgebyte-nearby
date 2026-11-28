@@ -148,12 +148,17 @@ public class NearbyHost<S, M, V>(
      *
      * Returns true when this call took that request off [joinRequests]: the joiner gets the seat, or, when the room
      * filled up meanwhile, is refused as full. Returns false when, after the call has timed out old requests (not while
-     * the room is paused), no request has exactly this id and this code; then nothing was answered. Messages to the
-     * joiner are sent as far as its link allows.
+     * the room is paused), this call did not take a request with exactly this id and this code (the same call may
+     * still time out old requests, this one too). Messages to the joiner are sent as far as its link allows.
      */
     public suspend fun acceptRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = true)
 
-    /** Declines join request [id] only while it still shows [checkCode]; returns as [acceptRequest] does. */
+    /**
+     * Declines join request [id] only while it still shows [checkCode], in the same locked step as [acceptRequest].
+     * Returns true when this call took that request off [joinRequests]; the joiner is then told the host did not let
+     * them in, as far as its link allows. Returns false when this call did not take a matching request (the same call
+     * may still time out old requests, this one too).
+     */
     public suspend fun declineRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = false)
 
     @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")

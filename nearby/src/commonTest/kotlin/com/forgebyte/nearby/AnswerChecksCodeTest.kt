@@ -46,6 +46,29 @@ class AnswerChecksCodeTest {
     }
 
     @Test
+    fun givenRetryShowsTheSameCode_whenItArrives_thenTheRequestIsDroppedAndTheNextTryIsANewRequest() {
+        val same = Harness(FakeGame(), checkCodeOf = { "123456" }) // two key exchanges that gave the same six digits
+        same.request("a", name = "Asha", joinId = "J1")
+        val out = same.request("a2", name = "Asha", joinId = "J1")
+        assertTrue(out.closed("a2"), "the retry is closed, so the joiner tries again")
+        assertEquals(emptyList(), same.room.joinRequests)
+        assertEquals(emptyList<RoomOutput>() to false, same.room.answerRequest(1, "123456", accept = true), "the old answer takes nothing")
+        same.request("a3", name = "Asha", joinId = "J1")
+        assertEquals(listOf(JoinRequest(2, "Asha", "123456")), same.room.joinRequests, "a new request, a new id")
+        assertEquals(emptyList(), same.room.acceptRequest(1, "123456"))
+        assertEquals(1, same.room.acceptRequest(2, "123456").welcome("a3").lobby.yourSeat)
+    }
+
+    @Test
+    fun givenEmptyCodes_whenARetryMovesTheRequest_thenItMovesAsBefore() {
+        val none = Harness(FakeGame(), checkCodeOf = { "" }) // a Room with no secure channel: no code, no check
+        none.request("a", name = "Asha", joinId = "J1")
+        none.request("a2", name = "Asha", joinId = "J1")
+        assertEquals(listOf(JoinRequest(1, "Asha", "")), none.room.joinRequests)
+        assertEquals(1, none.room.acceptRequest(1, "").welcome("a2").lobby.yourSeat)
+    }
+
+    @Test
     fun givenRequest_whenHostAnswersWithACodeItNeverShowed_thenNothingIsTaken() {
         h.request("a", name = "Asha")
         assertEquals(emptyList(), room.acceptRequest(1, "000000"))

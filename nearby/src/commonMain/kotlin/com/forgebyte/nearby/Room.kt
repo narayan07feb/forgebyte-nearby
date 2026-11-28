@@ -53,7 +53,8 @@ public class RoomConfig(
  *
  * A retry of the same join can move the request to a new connection with a new [checkCode] under the same [id]. Answer
  * with both values from the same [JoinRequest] (`acceptRequest(id, checkCode)`), so an answer for the code the host
- * compared never reaches a connection whose code it did not see.
+ * compared never reaches a connection whose code it did not see. (A retry that shows the same code is dropped and comes
+ * back as a new request. An empty code, a Room with no secure channel, checks nothing.)
  */
 public data class JoinRequest(val id: Int, val name: String, val checkCode: String)
 
@@ -310,9 +311,18 @@ public class Room<S, M, V>(
             val seat = seats.indexOfFirst { t -> t.joinId?.let { sameSecret(it, h.joinId) } == true }
             if (seat >= 0) return reseat(seat, conn)
             pending.firstOrNull { p -> p.joinId?.let { sameSecret(it, h.joinId) } == true }?.let { p ->
+                val shown = p.checkCode
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = checkCodeOf(conn)
+                if (p.checkCode.isNotEmpty() && p.checkCode == shown) {
+                    // The new connection shows the code the host may have just compared (six digits: 1 in a million),
+                    // so an answer meant for the old one could reach it. Drop the request; the joiner's next try comes
+                    // back as a new request with a new id.
+                    pending.remove(p)
+                    out += RoomOutput.Close(conn)
+                    return
+                }
                 if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
             }
