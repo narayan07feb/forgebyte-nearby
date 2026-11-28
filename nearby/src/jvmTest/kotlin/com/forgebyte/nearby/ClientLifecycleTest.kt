@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -16,6 +17,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /** How a joiner ends: leaving, being torn down by the app, and who may clear the saved seat. */
@@ -83,10 +85,9 @@ class ClientLifecycleTest {
         val c = client(store)
         val job = c.joinedVia(host.open(bindHost = LOOPBACK))
         val saved = store.load() ?: error("no seat saved on the Welcome")
-        job.cancel()
-        delay(1_000)
-        assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name }, "no Leave reached the host")
-        assertEquals(false, host.lobby.value.seats[1].connected, "the host saw the link drop")
+        job.cancelAndJoin()
+        val lobby = withTimeoutOrNull(10.seconds) { host.lobby.first { it.seats.size == 2 && !it.seats[1].connected } }
+        assertEquals(listOf("Host", "Asha"), lobby?.seats?.map { it.name }, "the host saw the link drop and kept the seat: no Leave")
         assertEquals(saved, store.load(), "the seat stays for resume()")
         assertTrue(withTimeoutOrNull(5.seconds) { c.http.coroutineContext[kotlinx.coroutines.Job]!!.join() } != null, "the HTTP client is closed")
     }
@@ -112,11 +113,41 @@ class ClientLifecycleTest {
         gate.closed = true // the host is out of reach
         c.dropForTest()
         withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Reconnecting } } ?: error("no reconnect: ${c.status.value}")
-        c.leave()
-        gate.closed = false // the host is back: a client that ignores leave() reconnects now
-        val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended || it == ClientStatus.Connected } }
-        assertEquals(ClientStatus.Ended(EndReason.Left), end)
+        val hellos = java.util.concurrent.atomic.AtomicInteger()
+        traceSink = { if (it.startsWith("host: ") && it.contains(" hello ")) hellos.incrementAndGet() }
+        try {
+            c.leave()
+            gate.closed = false // the host is back: a client that ignores leave() reconnects now
+            val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } }
+            assertEquals(ClientStatus.Ended(EndReason.Left), end)
+            delay(500)
+            assertEquals(0, hellos.get(), "no hello reached the host after leave()")
+        } finally {
+            traceSink = null
+        }
         assertEquals(null, store.load(), "a left seat is not kept")
+    }
+
+    @Test
+    fun givenWaitingToRetry_whenThePlayerLeaves_thenTheClientEndsAtOnceNotAfterTheRetryWait() = runBlocking<Unit> {
+        val gate = Gate(host.open(bindHost = LOOPBACK)).also { gates += it }
+        val c = client(InMemorySeatStore())
+        c.joinedVia(gate.port)
+        gate.closed = true
+        val failed = kotlinx.coroutines.CompletableDeferred<Unit>()
+        traceSink = { if (it.startsWith("joiner: attempt failed")) failed.complete(Unit) }
+        try {
+            c.dropForTest()
+            withTimeoutOrNull(10.seconds) { failed.await() } ?: error("no failed attempt: ${c.status.value}")
+            delay(100) // past the end-of-attempt checks, into the wait
+            val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+            c.leave() // now in the 1 s wait before the next try
+            val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } }
+            assertEquals(ClientStatus.Ended(EndReason.Left), end)
+            assertTrue(t0.elapsedNow() < 500.milliseconds, "ended ${t0.elapsedNow()} after leave(), the retry wait is 1 s")
+        } finally {
+            traceSink = null
+        }
     }
 
     @Test
@@ -126,7 +157,8 @@ class ClientLifecycleTest {
         c.joinedVia(host.open(bindHost = LOOPBACK))
         store.save(otherSeat) // another client saved its seat since
         host.kick(1)
-        withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } } ?: error("not ended: ${c.status.value}")
+        val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } }
+        assertEquals(ClientStatus.Ended(EndReason.Kicked), end)
         assertEquals(otherSeat, store.load(), "only the seat this client saved may be cleared")
     }
 
@@ -144,14 +176,24 @@ class ClientLifecycleTest {
     }
 
     @Test
-    fun givenAnExpiredSavedSeat_whenAnotherSeatIsInTheStore_thenResumeDoesNotClearIt() {
+    fun givenAnExpiredSavedSeat_whenAnotherSeatIsInTheStore_thenResumeDoesNotClearIt() = runBlocking<Unit> {
         val store = InMemorySeatStore()
         store.save(otherSeat)
         val c = client(store)
         c.wallClock = { 100 * 60_000L }
-        val old = otherSeat.copy(token = "old-token", droppedAtMs = 0)
-        c.resume(old)
+        c.resume(otherSeat.copy(token = "old-token", droppedAtMs = 0)).join()
         assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.value)
         assertEquals(otherSeat, store.load(), "the expired seat is not the one in the store")
+    }
+
+    @Test
+    fun givenAnExpiredSavedSeat_whenItIsTheOneInTheStore_thenResumeClearsItAndClosesTheClient() = runBlocking<Unit> {
+        val expired = otherSeat.copy(droppedAtMs = 0)
+        val store = InMemorySeatStore().apply { save(expired) }
+        val c = client(store)
+        c.wallClock = { 100 * 60_000L }
+        c.resume(expired).join()
+        assertEquals(null, store.load())
+        assertTrue(withTimeoutOrNull(5.seconds) { c.http.coroutineContext[kotlinx.coroutines.Job]!!.join() } != null, "the HTTP client is closed")
     }
 }

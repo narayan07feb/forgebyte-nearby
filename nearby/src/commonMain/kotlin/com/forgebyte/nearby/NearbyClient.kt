@@ -9,6 +9,7 @@ import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -59,6 +60,9 @@ public sealed interface EndReason {
     public data object HostKeyMismatch : EndReason
 }
 
+/** All clients in the app write their saved seat one at a time (see [NearbyClient]). */
+private val seatLock = Mutex()
+
 /**
  * A joiner's side of a room. Call [join] once; [status], [lobby] and [view] follow the room from then on.
  *
@@ -67,8 +71,9 @@ public sealed interface EndReason {
  * the saved seat stays in the [SeatStore] for a later [resume]. To give the seat up, call [leave].
  *
  * The store is shared: this client saves its seat on each Welcome, and later writes or clears it only while the store
- * still holds the seat this client saved, so an older client cannot erase or change a newer client's seat. (The check
- * and the write are two store calls, not one atomic step.)
+ * still holds the seat this client saved, so an older client cannot erase or change a newer client's seat. The library
+ * makes these checks and writes one at a time for all clients in the app; an app that writes the same store itself, or
+ * wraps one stored value in two SeatStore objects, must not do so while a client runs.
  */
 public class NearbyClient<M, V>(
     private val gameId: String,
@@ -103,6 +108,7 @@ public class NearbyClient<M, V>(
     @Volatile private var attemptJob: Job? = null
     private val sendLock = Mutex() // seal and send in one step, so frame counters reach the host in order
     @Volatile private var leaving = false
+    private val leaveSignal = CompletableDeferred<Unit>()
     /** The token of the seat this client last saved; the store is changed for this client only while it holds it. */
     @Volatile private var savedToken: String? = null
     @Volatile private var lastSeq = 0
@@ -153,7 +159,8 @@ public class NearbyClient<M, V>(
      */
     public fun requestJoin(code: ShortCode, name: String): Job {
         val host = myAddresses().firstNotNullOfOrNull(code::hostOn)
-            ?: return scope.launch { _status.value = ClientStatus.Ended(EndReason.Unreachable); http.close() }
+            ?: return scope.launch { _status.value = ClientStatus.Ended(EndReason.Unreachable) }
+                .also { job -> job.invokeOnCompletion { http.close() } }
         return connect(host, code.port, secret = null, fingerprint = null, name)
     }
 
@@ -170,9 +177,9 @@ public class NearbyClient<M, V>(
         val droppedAt = seat.droppedAtMs
         if (droppedAt != null && wallClock() - droppedAt > keptSeatFor.inWholeMilliseconds) {
             trace("joiner: kept seat dropped ${wallClock() - droppedAt} ms ago; not resumed")
-            if (seatStore.load()?.token == seat.token) seatStore.clear()
             _status.value = ClientStatus.Ended(EndReason.Unreachable)
-            return Job().apply { complete() }
+            http.close()
+            return scope.launch { clearIfMine(seat.token) }
         }
         return connect(seat.host, seat.port, secret = null, fingerprint = seat.fingerprint, seat.name, resumeToken = seat.token)
     }
@@ -244,10 +251,11 @@ public class NearbyClient<M, V>(
                         Handshake.Failed -> return@webSocket // treated as a drop below
                     }
                     shook = true
-                    if (leaving) return@webSocket // left while the link was down or in the key exchange: no hello
                     pinned = secure.hostFingerprint
                     _checkCode.value = secure.checkCode
                     link = Link(this, secure)
+                    // After the link is set: a leave() now either finds the link (and sends Leave) or is seen here.
+                    if (leaving) return@webSocket // left while the link was down or in the key exchange: no hello
                     // A link that goes silent with no FIN: Ktor's pinger starts the close after its pong timeout, but the
                     // close never gets an answer, so 'incoming' would wait until the link comes back. End the attempt soon
                     // after the close starts; the grace lets a normal close deliver the host's last messages first.
@@ -278,8 +286,10 @@ public class NearbyClient<M, V>(
                             token = msg.reconnectToken
                             droppedAt = null
                             saved = SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken)
-                            seatStore.save(saved!!)
-                            savedToken = msg.reconnectToken
+                            seatLock.withLock {
+                                seatStore.save(saved!!)
+                                savedToken = msg.reconnectToken
+                            }
                         }
                         end = handle(msg)
                         if (end != null) break
@@ -318,17 +328,19 @@ public class NearbyClient<M, V>(
                 return@launch
             }
             _status.value = if (token == null) ClientStatus.Connecting else ClientStatus.Reconnecting
-            delay(1_000)
+            withTimeoutOrNull(1_000) { leaveSignal.await() } // a leave() ends the wait at once
         }
     }.also { job -> job.invokeOnCompletion { http.close() } } // also when the app cancels it (see the class KDoc)
 
     /** Writes [seat] only while the store still holds the seat this client saved (see the class KDoc). */
-    private fun saveIfMine(seat: SavedSeat) {
+    private suspend fun saveIfMine(seat: SavedSeat) = seatLock.withLock {
+        currentCoroutineContext().ensureActive()
         if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.save(seat)
     }
 
-    private fun clearIfMine() {
-        if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.clear()
+    private suspend fun clearIfMine(token: String? = savedToken) = seatLock.withLock {
+        currentCoroutineContext().ensureActive()
+        if (token != null && seatStore.load()?.token == token) seatStore.clear()
     }
 
     /**
@@ -384,6 +396,8 @@ public class NearbyClient<M, V>(
 
     public suspend fun leave() {
         leaving = true
+        leaveSignal.complete(Unit)
+        if (link == null) attemptJob?.cancel() // no link yet: stop the attempt that is connecting
         send(ClientMsg.Leave)
         link?.socket?.run {
             flush()
