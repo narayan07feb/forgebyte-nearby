@@ -12,10 +12,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -31,8 +34,8 @@ class ClientLifecycleTest {
     @AfterTest
     fun tearDown() = runBlocking {
         gates.forEach { it.close() }
-        withTimeoutOrNull(10.seconds) { host.leave() }
-        scope.cancel()
+        scope.cancel() // first: leave() cannot be cut by a timeout, so nothing of a failed test may still hold it up
+        host.leave()
     }
 
     /** Forwards to the host; while [closed] it takes each new connection and closes it at once (host unreachable). */
@@ -74,8 +77,22 @@ class ClientLifecycleTest {
         }
     }
 
-    private fun client(store: SeatStore) =
-        NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope, seatStore = store)
+    private fun client(store: SeatStore, on: CoroutineScope = scope) =
+        NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), on, seatStore = store)
+
+    /** An app's store whose next [load] (or [save]) waits, after [entered], until [release]: a slow disk. */
+    private class SlowStore : SeatStore {
+        val inner = InMemorySeatStore()
+        @Volatile var pauseLoad = false
+        @Volatile var pauseSave = false
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        private fun pause() { entered.countDown(); release.await(10, TimeUnit.SECONDS) }
+        override fun load(): SavedSeat? { if (pauseLoad) { pauseLoad = false; pause() }; return inner.load() }
+        override fun save(seat: SavedSeat) { if (pauseSave) { pauseSave = false; pause() }; inner.save(seat) }
+        override fun clear() = inner.clear()
+        fun awaitEntered() = assertTrue(entered.await(10, TimeUnit.SECONDS), "the store call started")
+    }
 
     private suspend fun NearbyClient<FakeMove, FakeView>.joinedVia(port: Int): kotlinx.coroutines.Job {
         val job = join(JoinCode(LOOPBACK, port, Harness.SECRET, host.fingerprint!!), "Asha")
@@ -137,6 +154,58 @@ class ClientLifecycleTest {
             traceSink = null
         }
         assertEquals(saved, store.load(), "a cancelled client keeps its seat")
+    }
+
+    @Test
+    fun givenAKickedClient_whenTheAppCancelsWhileTheStoreLoads_thenTheSavedSeatStays() = runBlocking<Unit> {
+        val store = SlowStore()
+        val job = client(store).joinedVia(host.open(bindHost = LOOPBACK))
+        val saved = store.load() ?: error("no seat saved on the Welcome")
+        store.pauseLoad = true // the clear's ownership check
+        host.kick(1)
+        store.awaitEntered()
+        job.cancel()
+        store.release.countDown()
+        assertTrue(withTimeoutOrNull(10.seconds) { job.join() } != null, "the join Job ended")
+        assertEquals(saved, store.load(), "a cancel during the check writes nothing")
+    }
+
+    @Test
+    fun givenALinkDrop_whenTheAppCancelsWhileTheStoreLoads_thenNoDropStampIsWritten() = runBlocking<Unit> {
+        val store = SlowStore()
+        val c = client(store)
+        val job = c.joinedVia(host.open(bindHost = LOOPBACK))
+        val saved = store.load() ?: error("no seat saved on the Welcome")
+        store.pauseLoad = true // the drop stamp's ownership check
+        c.dropForTest()
+        store.awaitEntered()
+        job.cancel()
+        store.release.countDown()
+        assertTrue(withTimeoutOrNull(10.seconds) { job.join() } != null, "the join Job ended")
+        assertEquals(saved, store.load(), "a cancel during the check writes nothing")
+    }
+
+    @Test
+    fun givenAnExpiredSavedSeat_whenTheScopeIsCancelledWhileTheStoreLoads_thenTheSeatStays() = runBlocking<Unit> {
+        val expired = otherSeat.copy(droppedAtMs = 0)
+        val store = SlowStore().apply { inner.save(expired); pauseLoad = true }
+        val own = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val c = client(store, own)
+        c.wallClock = { 100 * 60_000L }
+        thread(isDaemon = true) { store.entered.await(10, TimeUnit.SECONDS); own.cancel(); store.release.countDown() }
+        c.resume(expired).join() // the clear runs at once on this thread and waits in load()
+        assertEquals(expired, store.load(), "a cancel during the check writes nothing")
+    }
+
+    @Test
+    fun givenTheWelcomeSaveIsSlow_whenTheAppSendsReady_thenItIsRefusedUntilTheSaveIsDone() = runBlocking<Unit> {
+        val store = SlowStore().apply { pauseSave = true }
+        val c = client(store)
+        c.join(JoinCode(LOOPBACK, host.open(bindHost = LOOPBACK), Harness.SECRET, host.fingerprint!!), "Asha")
+        store.awaitEntered()
+        assertFalse(c.ready(true), "not welcomed while the rotated token is not on disk")
+        store.release.countDown()
+        assertEquals(ClientStatus.Connected, withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected } })
     }
 
     @Test

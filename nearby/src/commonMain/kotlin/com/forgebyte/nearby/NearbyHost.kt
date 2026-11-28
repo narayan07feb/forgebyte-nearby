@@ -15,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.channels.Channel
@@ -64,6 +65,7 @@ public class NearbyHost<S, M, V>(
     private var left = false
     private var opened = false
     internal var afterServerStart: suspend (port: Int) -> Unit = {} // tests stop open() here, after the server started
+    internal var beforeHostLeave: () -> Unit = {} // tests throw here, like a game callback in hostLeave()
     private val wake = Channel<Unit>(Channel.CONFLATED) // tells the ticker to read the room's next wake time again
     internal var randomBytes: (Int) -> ByteArray = ::secureRandomBytes // replaced only by tests
 
@@ -101,10 +103,14 @@ public class NearbyHost<S, M, V>(
      * throws [CancellationException] (a coroutine that called it just ends). A [leave] during it waits for it and then closes
      * the room; after [leave] it binds nothing and throws [CancellationException].
      */
-    public suspend fun open(port: Int = 0, bindHost: String = "0.0.0.0"): Int = lifeLock.withLock {
+    public suspend fun open(port: Int = 0, bindHost: String = "0.0.0.0"): Int {
+        return lifeLock.withLock { openLocked(port, bindHost) }
+    }
+
+    private suspend fun openLocked(port: Int, bindHost: String): Int {
         check(!opened) { "open() was already called on this host" }
+        opened = true // also for an open() refused below: a later call is a second call
         if (left) throw CancellationException("the room was left before it opened")
-        opened = true
         hostKey = HostKey.create() // new for this room, kept only in memory
         val server = embeddedServer(CIO, port = port, host = bindHost) {
             install(WebSockets) {
@@ -114,7 +120,7 @@ public class NearbyHost<S, M, V>(
             }
             routing { webSocket(WS_PATH) { serve(this) } }
         }
-        try {
+        return try {
             server.startSuspend(wait = false)
             val bound = server.engine.resolvedConnectors().first().port
             afterServerStart(bound)
@@ -134,7 +140,7 @@ public class NearbyHost<S, M, V>(
         } catch (e: Throwable) {
             // Cancelled before open() returned: no listening socket or ticker may stay behind.
             withContext(NonCancellable) {
-                jobs.forEach { it.cancel() }
+                jobs.forEach { it.cancelAndJoin() } // a tick in progress ends before open() throws
                 stopServer = null
                 server.stopSuspend(500, 1_000)
             }
@@ -221,19 +227,32 @@ public class NearbyHost<S, M, V>(
     public suspend fun resume(): Unit = act { resume() }
 
     /** Ends the room for everyone, then stops the server. */
-    public suspend fun leave(): Unit = withContext(NonCancellable) { // a cancelled caller still gets the whole close
+    public suspend fun leave() {
+        withContext(NonCancellable) { leaveNow() } // a cancelled caller still gets the whole close
+    }
+
+    private suspend fun leaveNow() {
         lifeLock.withLock { left = true } // waits for an open() still running; one after this binds nothing
         val t0 = TimeSource.Monotonic.markNow()
-        act { hostLeave() }
-        jobs.forEach { it.cancel() }
-        trace("host: leave: room closed sent (${t0.elapsedNow()})")
-        // Let every socket send "room closed" before the server goes, or joiners would take it for a drop.
-        val pending = lock.withLock { writers.toList() }
-        val flushed = withTimeoutOrNull(FLUSH) { pending.joinAll() } != null
-        trace("host: leave: ${pending.size} writers ${if (flushed) "flushed" else "NOT flushed"} (${t0.elapsedNow()})")
-        stopServer?.invoke()
-        trace("host: leave: server stopped (${t0.elapsedNow()})")
+        try {
+            beforeHostLeave()
+            act { hostLeave() }
+            jobs.forEach { it.cancel() }
+            trace("host: leave: room closed sent (${t0.elapsedNow()})")
+            // Let every socket send "room closed" before the server goes, or joiners would take it for a drop.
+            val pending = lock.withLock { writers.toList() }
+            val flushed = withTimeoutOrNull(FLUSH) { pending.joinAll() } != null
+            trace("host: leave: ${pending.size} writers ${if (flushed) "flushed" else "NOT flushed"} (${t0.elapsedNow()})")
+        } finally {
+            // Also when a game callback in hostLeave() throws: once left, the timer and the server stop.
+            jobs.forEach { it.cancel() }
+            stopServer?.invoke()
+            trace("host: leave: server stopped (${t0.elapsedNow()})")
+        }
     }
+
+    /** Test hook: true when every job of the room (the timer) has finished. */
+    internal fun jobsDoneForTest(): Boolean = jobs.all { it.isCompleted }
 
     private suspend fun serve(session: DefaultWebSocketServerSession) {
         val key = hostKey ?: return

@@ -69,7 +69,8 @@ private val seatLock = Mutex()
  *
  * To end the client without leaving the seat (the app's screen or process goes away), cancel the Job that [join],
  * [requestJoin] or [resume] returned: nothing is sent to the host, which keeps the seat for its reconnect window, and
- * the saved seat stays in the [SeatStore] for a later [resume]. To give the seat up, call [leave].
+ * the saved seat stays in the [SeatStore] for a later [resume]. A cancel that lands while a [SeatStore] write already
+ * runs does not undo that write. To give the seat up, call [leave].
  *
  * The store is shared: this client saves its seat on each Welcome, and later writes or clears it only while the store
  * still holds the seat this client saved, so an older client cannot erase or change a newer client's seat. The library
@@ -184,7 +185,7 @@ public class NearbyClient<M, V>(
             // Under the store lock, and only this exact record: a newer save of the same seat is not expired. It runs at
             // once when the lock is free, so Ended is set before resume() returns in the usual case.
             return scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                seatLock.withLock { if (isActive && seatStore.load() == seat) seatStore.clear() } // cancelled: keep it
+                seatLock.withLock { if (seatStore.load() == seat && isActive) seatStore.clear() } // cancelled: keep it
                 _status.value = ClientStatus.Ended(EndReason.Unreachable)
             }
         }
@@ -342,13 +343,15 @@ public class NearbyClient<M, V>(
 
     /** Writes [seat] only while the store still holds the seat this client saved (see the class KDoc). */
     private suspend fun saveIfMine(seat: SavedSeat) = seatLock.withLock {
-        currentCoroutineContext().ensureActive()
-        if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.save(seat)
+        if (savedToken == null || seatStore.load()?.token != savedToken) return@withLock
+        currentCoroutineContext().ensureActive() // after the load: a cancel while it ran writes nothing
+        seatStore.save(seat)
     }
 
     private suspend fun clearIfMine() = seatLock.withLock {
+        if (savedToken == null || seatStore.load()?.token != savedToken) return@withLock
         currentCoroutineContext().ensureActive() // a cancelled client keeps its seat (see the class KDoc)
-        if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.clear()
+        seatStore.clear()
     }
 
     /**
