@@ -59,7 +59,17 @@ public sealed interface EndReason {
     public data object HostKeyMismatch : EndReason
 }
 
-/** A joiner's side of a room. Call [join] once; [status], [lobby] and [view] follow the room from then on. */
+/**
+ * A joiner's side of a room. Call [join] once; [status], [lobby] and [view] follow the room from then on.
+ *
+ * To end the client without leaving the seat (the app's screen or process goes away), cancel the Job that [join],
+ * [requestJoin] or [resume] returned: nothing is sent to the host, which keeps the seat for its reconnect window, and
+ * the saved seat stays in the [SeatStore] for a later [resume]. To give the seat up, call [leave].
+ *
+ * The store is shared: this client saves its seat on each Welcome, and later writes or clears it only while the store
+ * still holds the seat this client saved, so an older client cannot erase or change a newer client's seat. (The check
+ * and the write are two store calls, not one atomic step.)
+ */
 public class NearbyClient<M, V>(
     private val gameId: String,
     private val gameVersion: Int,
@@ -74,7 +84,7 @@ public class NearbyClient<M, V>(
     /** Where the seat is kept for [resume] after the app is killed; see [SeatStore]. Default: memory only. */
     private val seatStore: SeatStore = InMemorySeatStore(),
 ) {
-    private val http = HttpClient(CIO) {
+    internal val http = HttpClient(CIO) { // internal: a test checks it is closed when the join Job is cancelled
         // One slow attempt must not use up the whole first-connect time: each try gets its own limit.
         engine { endpoint { connectTimeout = CONNECT_FOR.inWholeMilliseconds } }
         install(WebSockets) {
@@ -93,6 +103,8 @@ public class NearbyClient<M, V>(
     @Volatile private var attemptJob: Job? = null
     private val sendLock = Mutex() // seal and send in one step, so frame counters reach the host in order
     @Volatile private var leaving = false
+    /** The token of the seat this client last saved; the store is changed for this client only while it holds it. */
+    @Volatile private var savedToken: String? = null
     @Volatile private var lastSeq = 0
 
     /** This connection has its Welcome. The host takes any later message as proof of that, so none goes out before. */
@@ -158,7 +170,7 @@ public class NearbyClient<M, V>(
         val droppedAt = seat.droppedAtMs
         if (droppedAt != null && wallClock() - droppedAt > keptSeatFor.inWholeMilliseconds) {
             trace("joiner: kept seat dropped ${wallClock() - droppedAt} ms ago; not resumed")
-            seatStore.clear()
+            if (seatStore.load()?.token == seat.token) seatStore.clear()
             _status.value = ClientStatus.Ended(EndReason.Unreachable)
             return Job().apply { complete() }
         }
@@ -185,6 +197,7 @@ public class NearbyClient<M, V>(
     private fun connect(
         host: String, port: Int, secret: String?, fingerprint: String?, name: String, resumeToken: String? = null,
     ): Job = scope.launch {
+        savedToken = resumeToken
         val started = TimeSource.Monotonic.markNow()
         val joinId = secureRandomBytes(16).toHex() // one per join, kept across retries until the Welcome
         var pinned = fingerprint // after the first join, every reconnect must reach the same room key
@@ -231,6 +244,7 @@ public class NearbyClient<M, V>(
                         Handshake.Failed -> return@webSocket // treated as a drop below
                     }
                     shook = true
+                    if (leaving) return@webSocket // left while the link was down or in the key exchange: no hello
                     pinned = secure.hostFingerprint
                     _checkCode.value = secure.checkCode
                     link = Link(this, secure)
@@ -265,6 +279,7 @@ public class NearbyClient<M, V>(
                             droppedAt = null
                             saved = SavedSeat(host, port, secure.hostFingerprint, gameId, name, msg.reconnectToken)
                             seatStore.save(saved!!)
+                            savedToken = msg.reconnectToken
                         }
                         end = handle(msg)
                         if (end != null) break
@@ -287,7 +302,7 @@ public class NearbyClient<M, V>(
                     val at = droppedAt ?: TimeSource.Monotonic.markNow().also {
                         droppedAt = it
                         pausedAtDrop = pausedTotal()
-                        saved?.let { seat -> seatStore.save(seat.copy(droppedAtMs = wallClock())) } // the kept seat's age
+                        saved?.let { seat -> saveIfMine(seat.copy(droppedAtMs = wallClock())) } // the kept seat's age
                     }
                     pausedSince == null && retried(at) > retryFor
                 }
@@ -297,7 +312,7 @@ public class NearbyClient<M, V>(
                 trace("joiner: ended $it")
                 // The seat is gone for good after a refusal, a kick or a leave. After Unreachable the host may still hold it
                 // (a bot plays it), so the token stays for a later resume (ceo, 16 Nov 2026). A join without a seat keeps it.
-                if (token != null && it != EndReason.Unreachable) seatStore.clear()
+                if (token != null && it != EndReason.Unreachable) clearIfMine()
                 _status.value = ClientStatus.Ended(it)
                 http.close()
                 return@launch
@@ -305,6 +320,15 @@ public class NearbyClient<M, V>(
             _status.value = if (token == null) ClientStatus.Connecting else ClientStatus.Reconnecting
             delay(1_000)
         }
+    }.also { job -> job.invokeOnCompletion { http.close() } } // also when the app cancels it (see the class KDoc)
+
+    /** Writes [seat] only while the store still holds the seat this client saved (see the class KDoc). */
+    private fun saveIfMine(seat: SavedSeat) {
+        if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.save(seat)
+    }
+
+    private fun clearIfMine() {
+        if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.clear()
     }
 
     /**

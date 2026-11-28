@@ -14,6 +14,7 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +57,10 @@ public class NearbyHost<S, M, V>(
     private var nextConn = 0
     private val jobs = mutableListOf<Job>()
     private var stopServer: (suspend () -> Unit)? = null
+    /** open() registers its server and leave() marks the room left under this lock, so neither misses the other. */
+    private val lifeLock = Mutex()
+    private var left = false
+    internal var afterServerStart: suspend (port: Int) -> Unit = {} // tests stop open() here, after the server started
     private val wake = Channel<Unit>(Channel.CONFLATED) // tells the ticker to read the room's next wake time again
     internal var randomBytes: (Int) -> ByteArray = ::secureRandomBytes // replaced only by tests
 
@@ -88,6 +93,9 @@ public class NearbyHost<S, M, V>(
      * Starts the server on [port] (0 picks a free one) and returns the port it listens on. [bindHost] is the address
      * to listen on: all interfaces by default (joiners on the Wi-Fi); tests use "127.0.0.1" so a port held on loopback
      * by another program on a Mac cannot answer instead of us (seen 2026-11-03: a JetBrains process answered 404).
+     *
+     * If the call is cancelled, or [leave] runs before it returns, the server is stopped again and this throws
+     * [CancellationException] (a coroutine that called it just ends).
      */
     public suspend fun open(port: Int = 0, bindHost: String = "0.0.0.0"): Int {
         hostKey = HostKey.create() // new for this room, kept only in memory
@@ -99,19 +107,30 @@ public class NearbyHost<S, M, V>(
             }
             routing { webSocket(WS_PATH) { serve(this) } }
         }
-        server.startSuspend(wait = false)
-        stopServer = { server.stopSuspend(500, 1_000) }
-        // Wake exactly when the room next has something due (a paced bot move, a turn deadline), at least every second,
-        // and early when a room call moved that time sooner (a move with botDelayMs under a second).
-        jobs += scope.launch {
-            while (isActive) {
-                val wait = lock.withLock { room.nextWakeAt?.minus(now()) } ?: 1_000
-                withTimeoutOrNull(wait.coerceIn(5, 1_000)) { wake.receive() }
-                act { tick() }
-                wake.tryReceive() // this tick's own signal; the next wait is read fresh under the lock
+        try {
+            server.startSuspend(wait = false)
+            val bound = server.engine.resolvedConnectors().first().port
+            afterServerStart(bound)
+            lifeLock.withLock {
+                if (left) throw CancellationException("the room was left while it opened")
+                stopServer = { server.stopSuspend(500, 1_000) }
+                // Wake exactly when the room next has something due (a paced bot move, a turn deadline), at least every
+                // second, and early when a room call moved that time sooner (a move with botDelayMs under a second).
+                jobs += scope.launch {
+                    while (isActive) {
+                        val wait = lock.withLock { room.nextWakeAt?.minus(now()) } ?: 1_000
+                        withTimeoutOrNull(wait.coerceIn(5, 1_000)) { wake.receive() }
+                        act { tick() }
+                        wake.tryReceive() // this tick's own signal; the next wait is read fresh under the lock
+                    }
+                }
             }
+            return bound
+        } catch (e: Throwable) {
+            // Cancelled or left before the room was set up: no listening socket may stay behind.
+            withContext(NonCancellable) { server.stopSuspend(500, 1_000) }
+            throw e
         }
-        return server.engine.resolvedConnectors().first().port
     }
 
     /** What a joiner types or scans when discovery does not work on this network. Call after [open]. */
@@ -194,6 +213,7 @@ public class NearbyHost<S, M, V>(
 
     /** Ends the room for everyone, then stops the server. */
     public suspend fun leave() {
+        lifeLock.withLock { left = true } // an open() still running stops its own server
         val t0 = TimeSource.Monotonic.markNow()
         act { hostLeave() }
         jobs.forEach { it.cancel() }
