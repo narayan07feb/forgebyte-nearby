@@ -30,6 +30,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.KSerializer
 import kotlin.concurrent.Volatile
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -68,9 +69,9 @@ private val seatLock = Mutex()
  * A joiner's side of a room. Call [join] once; [status], [lobby] and [view] follow the room from then on.
  *
  * To end the client without leaving the seat (the app's screen or process goes away), cancel the Job that [join],
- * [requestJoin] or [resume] returned: nothing is sent to the host, which keeps the seat for its reconnect window, and
- * the saved seat stays in the [SeatStore] for a later [resume]. A cancel that lands while a [SeatStore] write already
- * runs does not undo that write. To give the seat up, call [leave].
+ * [requestJoin] or [resume] returned: no Leave message is sent (the socket just closes), the host keeps the seat for its
+ * reconnect window, and the saved seat stays in the [SeatStore] for a later [resume]. A cancel that lands while a
+ * [SeatStore] write already runs does not undo that write. To give the seat up, call [leave].
  *
  * The store is shared: this client saves its seat on each Welcome, and later writes or clears it only while the store
  * still holds the seat this client saved, so an older client cannot erase or change a newer client's seat. The library
@@ -115,6 +116,7 @@ public class NearbyClient<M, V>(
 
     /** The token of the seat this client last saved; the store is changed for this client only while it holds it. */
     @Volatile private var savedToken: String? = null
+    @Volatile private var savedFingerprint: String? = null // with [savedToken]: the room of the seat this client saved
     @Volatile private var lastSeq = 0
 
     /** This connection has its Welcome. The host takes any later message as proof of that, so none goes out before. */
@@ -185,7 +187,9 @@ public class NearbyClient<M, V>(
             // Under the store lock, and only this exact record: a newer save of the same seat is not expired. It runs at
             // once when the lock is free, so Ended is set before resume() returns in the usual case.
             return scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                seatLock.withLock { if (seatStore.load() == seat && isActive) seatStore.clear() } // cancelled: keep it
+                seatLock.withLock {
+                    if (storeCall("load", false) { seatStore.load() == seat } && isActive) storeCall("clear", Unit) { seatStore.clear() }
+                } // cancelled: keep it
                 _status.value = ClientStatus.Ended(EndReason.Unreachable)
             }
         }
@@ -213,6 +217,7 @@ public class NearbyClient<M, V>(
         host: String, port: Int, secret: String?, fingerprint: String?, name: String, resumeToken: String? = null,
     ): Job = scope.launch {
         savedToken = resumeToken // a resumed seat is this client's own
+        savedFingerprint = fingerprint
         val started = TimeSource.Monotonic.markNow()
         val joinId = secureRandomBytes(16).toHex() // one per join, kept across retries until the Welcome
         var pinned = fingerprint // after the first join, every reconnect must reach the same room key
@@ -293,6 +298,7 @@ public class NearbyClient<M, V>(
                                 currentCoroutineContext().ensureActive() // a cancelled client saves nothing
                                 seatStore.save(seat)
                                 savedToken = msg.reconnectToken
+                                savedFingerprint = seat.fingerprint
                             }
                             // Only after the save: if it throws, the next retry still uses the token that is on disk.
                             token = msg.reconnectToken
@@ -343,15 +349,29 @@ public class NearbyClient<M, V>(
 
     /** Writes [seat] only while the store still holds the seat this client saved (see the class KDoc). */
     private suspend fun saveIfMine(seat: SavedSeat) = seatLock.withLock {
-        if (savedToken == null || seatStore.load()?.token != savedToken) return@withLock
+        if (!storeCall("load", false) { ownsStoredSeat() }) return@withLock
         currentCoroutineContext().ensureActive() // after the load: a cancel while it ran writes nothing
-        seatStore.save(seat)
+        storeCall("save", Unit) { seatStore.save(seat) }
     }
 
     private suspend fun clearIfMine() = seatLock.withLock {
-        if (savedToken == null || seatStore.load()?.token != savedToken) return@withLock
+        if (!storeCall("load", false) { ownsStoredSeat() }) return@withLock
         currentCoroutineContext().ensureActive() // a cancelled client keeps its seat (see the class KDoc)
-        seatStore.clear()
+        storeCall("clear", Unit) { seatStore.clear() }
+    }
+
+    /** The store still holds the seat this client saved: the same token in the same room. */
+    private fun ownsStoredSeat(): Boolean =
+        seatStore.load()?.let { it.token == savedToken && it.fingerprint == savedFingerprint } == true
+
+    /** An app's store that throws is traced and skipped, so a reconnect or an end still goes on (not the Welcome save). */
+    private inline fun <T> storeCall(what: String, failed: T, call: () -> T): T = try {
+        call()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        trace("joiner: seat store $what failed: ${e::class.simpleName}")
+        failed
     }
 
     /**

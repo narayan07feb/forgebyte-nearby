@@ -99,9 +99,10 @@ public class NearbyHost<S, M, V>(
      * to listen on: all interfaces by default (joiners on the Wi-Fi); tests use "127.0.0.1" so a port held on loopback
      * by another program on a Mac cannot answer instead of us (seen 2026-11-03: a JetBrains process answered 404).
      *
-     * Call it once. If the call is cancelled before it returns, the server and the room's timer are stopped again and this
-     * throws [CancellationException] (a coroutine that called it just ends). A [leave] during it waits for it and then closes
-     * the room; after [leave] it binds nothing and throws [CancellationException].
+     * Call it once. A cancel that open() sees while it sets up stops the server and the room's timer again, and open()
+     * throws [CancellationException]. A cancel that lands after its last step cannot be seen, so the room may be open
+     * although the caller was cancelled: after a cancelled open(), call [leave] to be sure the server is stopped. A [leave]
+     * during open() waits for it and then closes the room; after [leave] it binds nothing and throws [CancellationException].
      */
     public suspend fun open(port: Int = 0, bindHost: String = "0.0.0.0"): Int {
         return lifeLock.withLock { openLocked(port, bindHost) }
@@ -251,8 +252,8 @@ public class NearbyHost<S, M, V>(
         }
     }
 
-    /** Test hook: true when every job of the room (the timer) has finished. */
-    internal fun jobsDoneForTest(): Boolean = jobs.all { it.isCompleted }
+    /** Test hook: true when the room's timer was started and every job of the room has finished. */
+    internal fun jobsDoneForTest(): Boolean = jobs.isNotEmpty() && jobs.all { it.isCompleted }
 
     private suspend fun serve(session: DefaultWebSocketServerSession) {
         val key = hostKey ?: return

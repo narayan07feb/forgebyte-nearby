@@ -85,12 +85,18 @@ class ClientLifecycleTest {
         val inner = InMemorySeatStore()
         @Volatile var pauseLoad = false
         @Volatile var pauseSave = false
+        @Volatile var failLoad = false
+        @Volatile var failClear = false
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         private fun pause() { entered.countDown(); release.await(10, TimeUnit.SECONDS) }
-        override fun load(): SavedSeat? { if (pauseLoad) { pauseLoad = false; pause() }; return inner.load() }
+        override fun load(): SavedSeat? {
+            if (pauseLoad) { pauseLoad = false; pause() }
+            if (failLoad) error("disk read failed")
+            return inner.load()
+        }
         override fun save(seat: SavedSeat) { if (pauseSave) { pauseSave = false; pause() }; inner.save(seat) }
-        override fun clear() = inner.clear()
+        override fun clear() { if (failClear) error("disk write failed"); inner.clear() }
         fun awaitEntered() = assertTrue(entered.await(10, TimeUnit.SECONDS), "the store call started")
     }
 
@@ -192,8 +198,9 @@ class ClientLifecycleTest {
         val own = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val c = client(store, own)
         c.wallClock = { 100 * 60_000L }
-        thread(isDaemon = true) { store.entered.await(10, TimeUnit.SECONDS); own.cancel(); store.release.countDown() }
+        thread(isDaemon = true) { if (store.entered.await(10, TimeUnit.SECONDS)) own.cancel(); store.release.countDown() }
         c.resume(expired).join() // the clear runs at once on this thread and waits in load()
+        assertEquals(0L, store.entered.count, "load() started, and the cancel came during it")
         assertEquals(expired, store.load(), "a cancel during the check writes nothing")
     }
 
@@ -206,6 +213,67 @@ class ClientLifecycleTest {
         assertFalse(c.ready(true), "not welcomed while the rotated token is not on disk")
         store.release.countDown()
         assertEquals(ClientStatus.Connected, withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected } })
+    }
+
+    @Test
+    fun givenTheStoreFailsToLoad_whenTheClientIsKicked_thenItStillEndsAsKicked() = runBlocking<Unit> {
+        val store = SlowStore()
+        val c = client(store)
+        c.joinedVia(host.open(bindHost = LOOPBACK))
+        store.failLoad = true
+        host.kick(1)
+        assertEquals(ClientStatus.Ended(EndReason.Kicked), withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } })
+    }
+
+    @Test
+    fun givenTheStoreFailsToLoad_whenTheLinkDrops_thenTheClientStillReconnects() = runBlocking<Unit> {
+        val store = SlowStore()
+        val c = client(store)
+        c.joinedVia(host.open(bindHost = LOOPBACK))
+        store.failLoad = true // the drop stamp's check fails
+        c.dropForTest()
+        withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Reconnecting } } ?: error("no reconnect: ${c.status.value}")
+        assertEquals(ClientStatus.Connected, withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected } })
+    }
+
+    @Test
+    fun givenTheStoreFailsToClear_whenAnExpiredSeatIsResumed_thenItEndsAndTheScopeLives() = runBlocking<Unit> {
+        val expired = otherSeat.copy(droppedAtMs = 0)
+        val store = SlowStore().apply { inner.save(expired); failClear = true }
+        val parent = kotlinx.coroutines.Job()
+        val c = client(store, CoroutineScope(parent + Dispatchers.Default))
+        c.wallClock = { 100 * 60_000L }
+        c.resume(expired).join()
+        assertEquals(ClientStatus.Ended(EndReason.Unreachable), c.status.value)
+        assertTrue(parent.isActive, "a failing store does not fail the app's scope")
+        parent.cancel()
+    }
+
+    @Test
+    fun givenAShortCodeJoin_whenTheClientIsKicked_thenItClearsItsOwnSeat() = runBlocking<Unit> {
+        val store = InMemorySeatStore()
+        val c = client(store).also { it.myAddresses = { listOf("127.0.0.9") } } // loopback counts as the same Wi-Fi
+        c.requestJoin(ShortCode(1, host.open(bindHost = LOOPBACK)), "Asha") // no room key until the key exchange
+        val request = withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.isNotEmpty() }.single() } ?: error("no request")
+        host.acceptRequest(request.id, request.checkCode)
+        withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected } } ?: error("not seated: ${c.status.value}")
+        assertTrue(store.load() != null, "the Welcome saved the seat")
+        host.kick(1)
+        withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } } ?: error("not ended: ${c.status.value}")
+        assertEquals(null, store.load(), "the seat this client saved (with the room key it learned) is cleared")
+    }
+
+    @Test
+    fun givenTheStoreHoldsTheSameTokenForAnotherRoom_whenAResumeIsRefused_thenThatRecordStays() = runBlocking<Unit> {
+        val port = host.open(bindHost = LOOPBACK)
+        val gone = SavedSeat(LOOPBACK, port, host.fingerprint!!, "fake", "Asha", "token-the-host-never-gave")
+        val otherRoom = gone.copy(fingerprint = "another-room-key")
+        val store = InMemorySeatStore().apply { save(otherRoom) }
+        val c = client(store)
+        c.resume(gone)
+        val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } } as? ClientStatus.Ended
+        assertEquals(RefuseReason.RECONNECT_EXPIRED, (end?.reason as? EndReason.Refused)?.reason, "ended as $end")
+        assertEquals(otherRoom, store.load(), "a seat of another room is not this client's")
     }
 
     @Test
