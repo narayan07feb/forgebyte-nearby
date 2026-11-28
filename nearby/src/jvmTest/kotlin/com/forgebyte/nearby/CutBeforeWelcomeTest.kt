@@ -213,6 +213,9 @@ class CutBeforeWelcomeTest {
         relay.releaseRetry.countDown()
         val request = withTimeoutOrNull(15.seconds) { host.joinRequests.first { it.isNotEmpty() } }?.single() ?: error("no retry request")
         assertTrue(request.id != first.id, "the retry is a new request")
+        assertFalse(host.acceptRequest(first.id, first.checkCode), "the old pair takes nothing with the new request waiting")
+        assertFalse(host.declineRequest(first.id, first.checkCode))
+        assertEquals(listOf(request), host.joinRequests.value, "the new request survives")
         assertTrue(host.acceptRequest(request.id, request.checkCode))
         val status = withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended } }
         assertEquals(ClientStatus.Connected, status, "the approval reached the retried connection")
@@ -234,12 +237,17 @@ class CutBeforeWelcomeTest {
         joiner().requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, port), "Bo")
         val bo = withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.size == 2 } }?.get(1) ?: error("no second request")
         relay.cutFirstJoinerSide()
-        // The retry moves Asha's request in place: same id, the new connection's code. (If the six digits came out
-        // equal, 1 in a million, the room drops the request instead and this wait times out.) That the code is
-        // compared inside the room step is shown by the Room tests and the mutants, not by this order.
-        val moved = withTimeoutOrNull(15.seconds) {
-            host.joinRequests.first { r -> r.size == 2 && r[0].id == seen.id && r[0].checkCode != seen.checkCode }
-        }?.first() ?: error("no retry: ${host.joinRequests.value}")
+        // The retry moves Asha's request in place: same id, the new connection's code. If the six digits came out
+        // equal (rare), the room drops the request instead and Asha comes back as a new request: this order cannot
+        // be checked then, so the test is skipped. That the code is compared inside the room step is shown by the
+        // Room tests and the mutants, not by this order.
+        val next = withTimeoutOrNull(15.seconds) {
+            host.joinRequests.first { r ->
+                r.size == 2 && (r[0].id == seen.id && r[0].checkCode != seen.checkCode || r.none { it.id == seen.id })
+            }
+        } ?: error("no retry: ${host.joinRequests.value}")
+        org.junit.Assume.assumeTrue("the retry showed the same code: dropped, not moved", next[0].id == seen.id)
+        val moved = next.first()
         assertEquals(listOf("Asha", "Bo"), host.joinRequests.value.map { it.name }, "the retry moved Asha's request in place")
         withTimeoutOrNull(10.seconds) { c.checkCode.first { it == moved.checkCode } } ?: error("the joiner never showed the new code")
         withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.WaitingForHost } } ?: error("joiner ${c.status.value}")

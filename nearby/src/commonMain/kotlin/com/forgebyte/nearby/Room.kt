@@ -53,8 +53,8 @@ public class RoomConfig(
  *
  * A retry of the same join can move the request to a new connection with a new [checkCode] under the same [id]. Answer
  * with both values from the same [JoinRequest] (`acceptRequest(id, checkCode)`), so an answer for the code the host
- * compared never reaches a connection whose code it did not see. (A retry that shows the same code is dropped and comes
- * back as a new request. An empty code, a Room with no secure channel, checks nothing.)
+ * compared never reaches a connection whose code it did not see. (A retry that shows a code the request showed before
+ * is dropped; a later try is a new request with a new id. An empty code, a Room with no secure channel, checks nothing.)
  */
 public data class JoinRequest(val id: Int, val name: String, val checkCode: String)
 
@@ -95,7 +95,10 @@ public class Room<S, M, V>(
         var heldToken: String? = null
     }
 
-    private class Pending(val id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?)
+    private class Pending(val id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?) {
+        /** Every code this request has shown; a retry must not show one again under the same id. */
+        val shownCodes = mutableSetOf(checkCode)
+    }
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -311,14 +314,13 @@ public class Room<S, M, V>(
             val seat = seats.indexOfFirst { t -> t.joinId?.let { sameSecret(it, h.joinId) } == true }
             if (seat >= 0) return reseat(seat, conn)
             pending.firstOrNull { p -> p.joinId?.let { sameSecret(it, h.joinId) } == true }?.let { p ->
-                val shown = p.checkCode
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = checkCodeOf(conn)
-                if (p.checkCode.isNotEmpty() && p.checkCode == shown) {
-                    // The new connection shows the code the host may have just compared (six digits: 1 in a million),
-                    // so an answer meant for the old one could reach it. Drop the request; the joiner's next try comes
-                    // back as a new request with a new id.
+                if (p.checkCode.isNotEmpty() && !p.shownCodes.add(p.checkCode)) {
+                    // The new connection shows a code this request showed before (six digits: rare), so an answer the
+                    // host meant for an earlier connection could reach it. Drop the request; a later try by the joiner,
+                    // if it comes, is a new request with a new id.
                     pending.remove(p)
                     out += RoomOutput.Close(conn)
                     return

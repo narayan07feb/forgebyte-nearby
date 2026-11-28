@@ -60,6 +60,33 @@ class AnswerChecksCodeTest {
     }
 
     @Test
+    fun givenRetriesShowCodesAThenBThenA_whenTheHostAnswersForTheFirstConnection_thenNothingIsTaken() {
+        val codes = mapOf("a" to "111111", "a2" to "222222", "a3" to "111111")
+        for (accept in listOf(true, false)) {
+            val abA = Harness(FakeGame(), checkCodeOf = { codes.getValue(it) })
+            abA.request("a", name = "Asha", joinId = "J1")
+            abA.request("a2", name = "Asha", joinId = "J1")
+            assertEquals(listOf(JoinRequest(1, "Asha", "222222")), abA.room.joinRequests)
+            val out = abA.request("a3", name = "Asha", joinId = "J1")
+            assertTrue(out.closed("a3"), "a code the request showed before: the retry is closed")
+            assertEquals(emptyList(), abA.room.joinRequests)
+            assertEquals(emptyList<RoomOutput>() to false, abA.room.answerRequest(1, "111111", accept), "accept=$accept")
+            assertEquals(1, abA.room.seatCount)
+        }
+    }
+
+    @Test
+    fun givenRetriesShowCodesABCThenB_whenTheHostAnswersForTheSecondConnection_thenNothingIsTaken() {
+        val codes = mapOf("a" to "111111", "a2" to "222222", "a3" to "333333", "a4" to "222222")
+        val abcb = Harness(FakeGame(), checkCodeOf = { codes.getValue(it) })
+        for (conn in listOf("a", "a2", "a3")) abcb.request(conn, name = "Asha", joinId = "J1")
+        assertEquals(listOf(JoinRequest(1, "Asha", "333333")), abcb.room.joinRequests, "every new code moves it")
+        assertTrue(abcb.request("a4", name = "Asha", joinId = "J1").closed("a4"), "a middle code again: dropped")
+        assertEquals(emptyList<RoomOutput>() to false, abcb.room.answerRequest(1, "222222", accept = true))
+        assertEquals(1, abcb.room.seatCount)
+    }
+
+    @Test
     fun givenEmptyCodes_whenARetryMovesTheRequest_thenItMovesAsBefore() {
         val none = Harness(FakeGame(), checkCodeOf = { "" }) // a Room with no secure channel: no code, no check
         none.request("a", name = "Asha", joinId = "J1")
