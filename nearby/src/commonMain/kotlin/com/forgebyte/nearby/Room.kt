@@ -1,5 +1,7 @@
 package com.forgebyte.nearby
 
+import kotlin.coroutines.cancellation.CancellationException
+
 /** The connection id the host's own seat uses. The transport delivers these messages on the host phone itself. */
 public const val HOST_CONN: String = "host"
 
@@ -52,7 +54,7 @@ public class RoomConfig(
  * Accept only when they match: a different code means someone on the network sits between the two phones.
  *
  * [id] names this request on this connection. A retry of the same join that moves the request to a new connection gets
- * a new [id] (and a new [checkCode]), in the same place in the list, so an answer for what the host saw before cannot
+ * a new [id] (and a new [checkCode]; before v0.4.0 the id stayed), in the same place in the list, so an answer for what the host saw before cannot
  * reach the new connection. Answer with both: `acceptRequest(id, checkCode)` or `declineRequest(id, checkCode)`.
  */
 public data class JoinRequest(val id: Int, val name: String, val checkCode: String)
@@ -79,7 +81,7 @@ public class Room<S, M, V>(
     private val config: RoomConfig,
     private val clock: () -> Long,
     private val newToken: () -> String = ::secureToken,
-    /** The check code of a connection's encrypted channel, shown with its join request. */
+    /** The check code of a connection's encrypted channel, shown with its join request. If it throws, that connection is closed. */
     private val checkCodeOf: (conn: String) -> String = { "" },
 ) {
     private class Seat(var name: String, var kind: SeatKind, var conn: String?) {
@@ -282,13 +284,19 @@ public class Room<S, M, V>(
     }
 
     private inline fun step(block: () -> Unit): List<RoomOutput> {
+        // Each call has its own list: a room call made from a callback (a game's newGame) keeps the outer call's outputs.
+        val outer = out
         out = mutableListOf()
-        if (phase != Phase.CLOSED) {
-            expireDropped()
-            fireDue()
-            block()
+        try {
+            if (phase != Phase.CLOSED) {
+                expireDropped()
+                fireDue()
+                block()
+            }
+            return out
+        } finally {
+            out = outer
         }
-        return out
     }
 
     private fun hello(conn: String, h: ClientMsg.Hello) {
@@ -315,8 +323,11 @@ public class Room<S, M, V>(
             // A retry of a join whose first socket died before its Welcome: same seat, or same request, again.
             val seat = seats.indexOfFirst { t -> t.joinId?.let { sameSecret(it, h.joinId) } == true }
             if (seat >= 0) return reseat(seat, conn)
-            pending.firstOrNull { p -> p.joinId?.let { sameSecret(it, h.joinId) } == true }?.let { p ->
+            val sameJoin = { p: Pending -> p.joinId?.let { sameSecret(it, h.joinId) } == true }
+            if (pending.any(sameJoin)) {
                 val code = codeOf(conn) ?: return // first: without a code the request stays as it was
+                // Looked up again: a checkCodeOf that called back into the room may have answered it meanwhile.
+                val p = pending.firstOrNull(sameJoin) ?: return newRequest(conn, h, code)
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = code
@@ -326,24 +337,34 @@ public class Room<S, M, V>(
                 return
             }
         }
+        if (h.roomSecret == null || config.approveCodeJoins) return newRequest(conn, h, code = null)
         if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
         if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
-        if (h.roomSecret == null || config.approveCodeJoins) { // the secret, if any, was checked above
-            if (pending.size >= config.maxPendingRequests) {
-                return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
-            }
-            val code = codeOf(conn) ?: return
-            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), code, h.joinId)
-            if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
-            return
-        }
         seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn).apply { joinId = h.joinId }
         welcome(seats.lastIndex)
     }
 
+    /** A join request that waits for the host ([code]: the connection's check code, when already read). */
+    private fun newRequest(conn: String, h: ClientMsg.Hello, code: String?) {
+        if (phase != Phase.LOBBY) return refuse(conn, RefuseReason.GAME_STARTED, GAME_STARTED)
+        if (seats.size >= config.maxSeats) return refuse(conn, RefuseReason.ROOM_FULL, ROOM_FULL)
+        if (pending.size >= config.maxPendingRequests) {
+            return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
+        }
+        val shown = code ?: codeOf(conn) ?: return
+        pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), shown, h.joinId)
+        if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
+    }
+
     /** [checkCodeOf] for [conn]; when it fails, the connection is closed (no request can show it) and this is null. */
-    private fun codeOf(conn: String): String? =
-        runCatching { checkCodeOf(conn) }.getOrElse { out += RoomOutput.Close(conn); null }
+    private fun codeOf(conn: String): String? = try {
+        checkCodeOf(conn)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        out += RoomOutput.Close(conn)
+        null
+    }
 
     /** The seat's player is back on [conn] (with their token, or their join id before any Welcome). */
     private fun reseat(seat: Int, conn: String) {

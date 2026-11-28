@@ -1,7 +1,9 @@
 package com.forgebyte.nearby
 
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -182,6 +184,13 @@ class AnswerChecksCodeTest {
     }
 
     @Test
+    fun givenCheckCodeIsCancelled_whenARequestArrives_thenTheCancellationIsNotSwallowed() {
+        val cancelled = Harness(FakeGame(), checkCodeOf = { throw CancellationException("stop") })
+        assertFailsWith<CancellationException> { cancelled.request("a", name = "Asha") }
+        assertEquals(emptyList(), cancelled.room.joinRequests)
+    }
+
+    @Test
     fun givenCheckCodeFailsForANewRequest_whenItArrives_thenItIsClosedAndNotListed() {
         val failing = Harness(FakeGame(), checkCodeOf = { error("no code") })
         assertTrue(failing.request("a", name = "Asha").closed("a"))
@@ -189,14 +198,29 @@ class AnswerChecksCodeTest {
     }
 
     @Test
-    fun givenNewGameCallsBackIntoTheRoom_whenTheHostStarts_thenTheGameStillStarts() {
+    fun givenNewGameCallsBackIntoTheRoom_whenTheHostStarts_thenTheGameStartsAndTheStartKeepsItsOutputs() {
         lateinit var nested: Harness<FakeState, FakeMove, FakeView>
         nested = Harness(object : FakeGame() {
             override fun newGame(seats: Int, seed: Long): FakeState = nested.room.tick().let { super.newGame(seats, seed) }
         })
+        nested.request("a", name = "Asha")
         nested.room.addBot()
-        nested.room.start(seed = 1)
+        val out = nested.room.start(seed = 1)
         assertEquals(Phase.PLAYING, nested.room.phase, "a nested room call is allowed, as before")
+        assertEquals(RefuseReason.GAME_STARTED, refusal(out, "a"), "the nested call did not drop the start's refusal")
+    }
+
+    @Test
+    fun givenCheckCodeAnswersTheOldRequest_whenARetryArrives_thenTheRetryBecomesANewRequest() {
+        lateinit var h2: Harness<FakeState, FakeMove, FakeView>
+        h2 = Harness(FakeGame(), checkCodeOf = { conn ->
+            if (conn == "a2") h2.room.declineRequest(1, "code-a") // a callback that calls back into the room
+            "code-$conn"
+        })
+        h2.request("a", name = "Asha", joinId = "J1")
+        h2.request("a2", name = "Asha", joinId = "J1")
+        assertEquals(listOf(JoinRequest(2, "Asha", "code-a2")), h2.room.joinRequests, "the retry still waits for the host")
+        assertEquals(1, h2.room.acceptRequest(2, "code-a2").welcome("a2").lobby.yourSeat)
     }
 
     @Suppress("DEPRECATION")

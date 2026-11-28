@@ -239,7 +239,7 @@ class CutBeforeWelcomeTest {
         assertTrue(relay.hostClosedFirst.await(5, java.util.concurrent.TimeUnit.SECONDS), "the retry moved the request: the host closed the old socket")
         val answered = if (decline) host.declineRequest(seen.id, seen.checkCode) else host.acceptRequest(seen.id, seen.checkCode)
         assertFalse(answered, "the answer for the code the host saw does not reach the new connection")
-        kotlinx.coroutines.delay(300) // a wrong seat or refusal would have reached the joiner by now
+        // No sleep: the real answer below returns true only if this one took nothing.
         assertEquals(ClientStatus.WaitingForHost, c.status.value)
         assertEquals(listOf("Host"), host.lobby.value.seats.map { it.name })
         assertEquals(listOf(moved, bo), host.joinRequests.value, "the new request stays for the host to check")
@@ -276,11 +276,13 @@ class CutBeforeWelcomeTest {
         val other = if (seen.checkCode == "000000") "000001" else "000000"
         assertFalse(host.acceptRequest(seen.id, other))
         assertFalse(host.declineRequest(seen.id, other))
-        kotlinx.coroutines.delay(300) // a wrong seat or refusal would have reached the joiner by now
         assertEquals(ClientStatus.WaitingForHost, c.status.value)
         assertEquals(listOf("Host"), host.lobby.value.seats.map { it.name })
         assertEquals(listOf(seen), host.joinRequests.value)
         assertFalse(host.acceptRequest(seen.id + 100, seen.checkCode), "an id no request has")
+        // The real answer works, so none of the wrong ones took the request.
+        assertTrue(host.acceptRequest(seen.id, seen.checkCode))
+        assertEquals(ClientStatus.Connected, withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected } })
     }
 
     /**
@@ -337,12 +339,13 @@ class CutBeforeWelcomeTest {
     // Failed before the held token (10 Nov): the second retry was told "Your seat is gone".
     @Test
     fun givenReconnect_whenItsWelcomeIsLost_thenTheNextRetryKeepsTheSeat() = runBlocking<Unit> {
-        val relay = CutRelay(host.open(bindHost = LOOPBACK), cutOn = 1)
+        val relay = CutRelay(host.open(bindHost = LOOPBACK), cutOn = 1).also { relays += it }
         val c = joiner()
         c.joinAndWait(relay)
         c.dropForTest()
         withTimeoutOrNull(20.seconds) { while (relay.connections.get() < 3 || c.status.value != ClientStatus.Connected) kotlinx.coroutines.delay(20) }
             ?: error("no seat after the lost Welcome: ${c.status.value}, ${relay.connections.get()} connections")
+        assertEquals(0L, relay.welcomeCut.count, "the reconnect's Welcome was really cut")
         c.ready(true)
         withTimeoutOrNull(10.seconds) { host.canStart.first { it } } ?: error("never startable: ${host.lobby.value}")
         assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name })
@@ -351,8 +354,8 @@ class CutBeforeWelcomeTest {
     }
 
     @Test
-    fun givenReconnectNotWelcomedYet_whenThePlayerActs_thenNothingIsSentUntilTheWelcome() = runBlocking<Unit> {
-        val relay = CutRelay(host.open(bindHost = LOOPBACK), cutOn = 1, hold = true)
+    fun givenReconnectNotWelcomedYet_whenThePlayerSetsReady_thenNothingIsSentUntilTheWelcome() = runBlocking<Unit> {
+        val relay = CutRelay(host.open(bindHost = LOOPBACK), cutOn = 1, hold = true).also { relays += it }
         val c = joiner()
         c.joinAndWait(relay)
         c.dropForTest()

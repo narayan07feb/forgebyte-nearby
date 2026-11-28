@@ -147,19 +147,19 @@ public class NearbyHost<S, M, V>(
      * that moved the request to a new connection cannot be seated by this call: the moved request has a new id, and
      * its code is worked out again for the new connection (six digits, so on rare occasions the same code).
      *
-     * Before it looks, the call times out requests whose time is up (not while the room is paused), this one too:
-     * then it returns false and the joiner is told the request timed out.
+     * Returns true when this call took that request off [joinRequests] for this answer: the joiner gets the seat, or,
+     * when the room filled up meanwhile, is refused as full. Returns false when, after the call has timed out old
+     * requests (not while the room is paused), no request has this id and code: it moved, timed out (this call may be
+     * the one that timed it out and told the joiner), was declined, the game started, or the room closed.
      *
-     * Returns true when this call took that request off [joinRequests]: the joiner gets the seat, or, when the room
-     * filled up meanwhile, is refused as full. Returns false when no request has this id and code (it moved, timed out,
-     * was declined, the game started, or the room closed); then nothing was done for it.
+     * Messages to the joiner are sent as far as its link allows: one whose link just dropped, or whose send queue is
+     * full, may not get them.
      */
     public suspend fun acceptRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = true)
 
     /**
-     * Declines join request [id] only while it still shows [checkCode]; see [acceptRequest]. Returns true when this
-     * call took the request off [joinRequests]; the refusal is then sent as well as the link allows (a joiner whose link
-     * just dropped, or whose send queue is full, may not get it). False when no request has this id and code.
+     * Declines join request [id] only while it still shows [checkCode]. Returns true and false as [acceptRequest] does;
+     * on true the joiner is told the host did not let them in (as far as its link allows).
      */
     public suspend fun declineRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = false)
 

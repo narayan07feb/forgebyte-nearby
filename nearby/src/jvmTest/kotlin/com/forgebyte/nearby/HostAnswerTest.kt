@@ -84,14 +84,13 @@ class HostAnswerTest {
     }
 
     @Test
-    fun givenRequestTimeUp_whenHostAccepts_thenFalseAndTheJoinerIsToldItTimedOut() = runBlocking<Unit> {
+    fun givenRequestTimedOutByTheRoomClock_whenHostAcceptsLater_thenFalse() = runBlocking<Unit> {
         withTimeout(30.seconds) {
-            val h = host(Harness.config(requestTimeoutMs = 300))
+            val h = host(Harness.config(requestTimeoutMs = 1_000))
             val port = h.open(bindHost = LOOPBACK)
             val (c, request) = h.ask(port)
-            kotlinx.coroutines.delay(1_500) // past the limit and a tick (at most 1 s apart), so it timed out already
+            assertEquals(RefuseReason.REQUEST_TIMED_OUT, c.refusal(), "the room's clock timed it out first")
             assertFalse(h.acceptRequest(request.id, request.checkCode))
-            assertEquals(RefuseReason.REQUEST_TIMED_OUT, c.refusal())
             assertEquals(listOf("Host"), h.lobby.value.seats.map { it.name })
         }
     }
