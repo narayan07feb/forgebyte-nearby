@@ -141,7 +141,7 @@ class LoopbackTest {
             c.status.first { it == ClientStatus.WaitingForHost }
             val request = host.joinRequests.first { it.isNotEmpty() }.single()
             assertEquals("Asha", request.name)
-            host.acceptJoin(request.id)
+            host.acceptRequest(request.id, request.checkCode)
             c.status.first { it == ClientStatus.Connected }
             assertEquals(1, c.lobby.value!!.yourSeat)
             host.lobby.first { it.seats.size == 2 }
@@ -158,7 +158,7 @@ class LoopbackTest {
             scope.launch { c.status.collect { seen += it } }
             scope.launch { host.joinRequests.collect { seen += "requests $it" } }
             c.requestJoin(ad(host.open(bindHost = LOOPBACK)), "Asha")
-            host.declineJoin(host.joinRequests.first { it.isNotEmpty() }.single().id)
+            host.joinRequests.first { it.isNotEmpty() }.single().let { host.declineRequest(it.id, it.checkCode) }
             val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } as ClientStatus.Ended }
                 ?: error("never ended; saw $seen")
             traceSink = null
@@ -188,7 +188,7 @@ class LoopbackTest {
             c.requestJoin(ad(port), "Early") // a request: the room key does not exist before the host opens
             kotlinx.coroutines.delay(1_500)
             host.open(port, bindHost = LOOPBACK)
-            host.joinRequests.first { it.isNotEmpty() }.single().let { host.acceptJoin(it.id) }
+            host.joinRequests.first { it.isNotEmpty() }.single().let { host.acceptRequest(it.id, it.checkCode) }
             assertEquals(ClientStatus.Connected, c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended })
         }
     }

@@ -73,7 +73,7 @@ public class NearbyHost<S, M, V>(
     public val canStart: StateFlow<Boolean> = _canStart.asStateFlow()
 
     private val _joinRequests = MutableStateFlow<List<JoinRequest>>(emptyList())
-    /** People asking to join; answer each with [acceptJoin] or [declineJoin]. */
+    /** People asking to join; answer each with [acceptRequest] or [declineRequest]. */
     public val joinRequests: StateFlow<List<JoinRequest>> = _joinRequests.asStateFlow()
 
     private val _turnTimer = MutableStateFlow<TurnTimer?>(null)
@@ -122,7 +122,7 @@ public class NearbyHost<S, M, V>(
 
     /**
      * Six-character codes ([ShortCode]) a joiner types to find this room on the same Wi-Fi, one per local address.
-     * A short-code join is a join request: it waits in [joinRequests] for [acceptJoin], like a room found nearby.
+     * A short-code join is a join request: it waits in [joinRequests] for the host's answer, like a room found nearby.
      */
     public fun shortCodes(port: Int): List<ShortCode> = localAddresses().mapNotNull { ShortCode.of(it, port) }
 
@@ -141,8 +141,37 @@ public class NearbyHost<S, M, V>(
             }
     }
 
+    /**
+     * Accepts join request [id] only while it still shows [checkCode], the code the host compared with the joiner's
+     * screen. Pass both from the same [JoinRequest]. The check and the answer happen in one step under the room lock,
+     * so a retry that moved the request to a new connection (a new code, same id) cannot be seated by this call.
+     *
+     * Returns true when this call took that request off [joinRequests]: the joiner is seated, or refused if the room
+     * filled up (or the game started) meanwhile. Returns false when no request with exactly this id and this code was
+     * waiting: a retry moved it, it timed out, it was answered already, or the room is closed. A call that finds the
+     * request timed out still tells that joiner so. Messages to the joiner are sent as far as its link allows.
+     */
+    public suspend fun acceptRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = true)
+
+    /**
+     * Declines join request [id] only while it still shows [checkCode], in the same locked step as [acceptRequest].
+     * Returns true when this call took that request off [joinRequests]; the joiner is then told the host did not let
+     * them in, as far as its link allows. Returns false as [acceptRequest] does.
+     */
+    public suspend fun declineRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = false)
+
+    @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")
     public suspend fun acceptJoin(id: Int): Unit = act { acceptJoin(id) }
+
+    @Deprecated("Does not check the code the host compared. Use declineRequest(id, checkCode).")
     public suspend fun declineJoin(id: Int): Unit = act { declineJoin(id) }
+
+    private suspend fun answer(id: Int, checkCode: String, accept: Boolean): Boolean {
+        var took = false
+        act { answerRequest(id, checkCode, accept).also { took = it.second }.first }
+        return took
+    }
+
     public suspend fun addBot(): Unit = act { addBot() }
     public suspend fun kick(seat: Int): Unit = act { kick(seat) }
     /**

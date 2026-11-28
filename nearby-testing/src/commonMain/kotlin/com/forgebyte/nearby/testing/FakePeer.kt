@@ -12,6 +12,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -41,14 +42,21 @@ public class FakePeer<M, V>(
 
     /**
      * Asks to join [host], which listens on [port] (from [NearbyHost.open]). With [autoAccept] the peer accepts its
-     * own request (matched by check code); without it the request waits in [NearbyHost.joinRequests] for the
-     * game's approve button. The job ends when the join ends; cancel it or call [leave] to stop the peer.
+     * own request (matched by check code, six digits, so meant for a room where no other joiner waits) until it has
+     * joined; without it the request waits in [NearbyHost.joinRequests] for the game's approve button. The job ends when the join ends; cancel it or call [leave] to stop the peer.
      */
     public fun join(host: NearbyHost<*, M, V>, port: Int, autoAccept: Boolean = true): Job = scope.launch {
         client.requestJoin(RoomAd("fake-peer", name, gameId, PROTOCOL_VERSION, gameVersion, 1, LOOPBACK, port), name)
-        if (autoAccept) launch {
-            val code = client.checkCode.filterNotNull().first()
-            host.acceptJoin(host.joinRequests.first { r -> r.any { it.checkCode == code } }.first { it.checkCode == code }.id)
+        // Accepts the request that shows this peer's current code; a retry moves it to a new code, so try again.
+        if (autoAccept) {
+            val approving = launch {
+                combine(client.checkCode.filterNotNull(), host.joinRequests) { code, requests ->
+                    requests.find { it.checkCode == code }
+                }
+                    .filterNotNull()
+                    .first { host.acceptRequest(it.id, it.checkCode) }
+            }
+            launch { client.status.first { it == ClientStatus.Connected }; approving.cancel() } // joined: stop approving
         }
         launch {
             client.status.first { it == ClientStatus.Connected }

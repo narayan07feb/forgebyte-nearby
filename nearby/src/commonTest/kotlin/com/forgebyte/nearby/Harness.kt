@@ -6,10 +6,21 @@ import kotlinx.serialization.json.JsonElement
 class Harness<S, M, V>(
     game: NearbyGame<S, M, V>,
     val config: RoomConfig = config(),
+    /** Each connection's check code; by default "code-<conn>", so a retry on a new connection gets a new code. */
+    checkCodeOf: (conn: String) -> String = { "code-$it" },
 ) {
     var now = 0L
     private var tokens = 0
-    val room = Room(game, config, clock = { now }, newToken = { "tok${++tokens}" })
+    val room = Room(game, config, clock = { now }, newToken = { "tok${++tokens}" }, checkCodeOf = checkCodeOf)
+
+    /** Accepts request [id] with the check code it shows now, as a host that just compared it. */
+    fun accept(id: Int) = room.acceptRequest(id, codeOf(id))
+
+    /** Declines request [id] with the check code it shows now. */
+    fun decline(id: Int) = room.declineRequest(id, codeOf(id))
+
+    /** The code request [id] shows; one that is not there gets a code no request has, so the answer does nothing. */
+    private fun codeOf(id: Int) = room.joinRequests.find { it.id == id }?.checkCode ?: "no such request"
 
     fun hello(
         conn: String,
@@ -35,7 +46,7 @@ class Harness<S, M, V>(
 
         /** Pacing and the turn timer are off unless a test asks, so older tests keep their meaning. */
         fun config(maxSeats: Int = 4, minSeats: Int = 2, maxPending: Int = 4, botDelayMs: Long = 0, turnTimeoutMs: Long = 0,
-                   approveCodeJoins: Boolean = false) = RoomConfig(
+                   approveCodeJoins: Boolean = false, requestTimeoutMs: Long = REQUEST_TIMEOUT) = RoomConfig(
             roomName = "Den",
             hostName = "Host",
             gameVersion = GAME_VERSION,
@@ -43,7 +54,7 @@ class Harness<S, M, V>(
             maxSeats = maxSeats,
             minSeats = minSeats,
             reconnectWindowMs = WINDOW,
-            requestTimeoutMs = REQUEST_TIMEOUT,
+            requestTimeoutMs = requestTimeoutMs,
             maxPendingRequests = maxPending,
             botDelayMs = botDelayMs,
             turnTimeoutMs = turnTimeoutMs,

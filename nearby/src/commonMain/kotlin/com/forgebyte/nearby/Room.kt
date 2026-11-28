@@ -48,9 +48,13 @@ public class RoomConfig(
 }
 
 /**
- * Someone asking to join; the host accepts or declines it by [id]. The host's screen shows [checkCode] next to the
- * name; the joiner's screen shows its own. Accept only when they match: a different code means someone on the
- * network sits between the two phones.
+ * Someone asking to join. The host's screen shows [checkCode] next to the name; the joiner's screen shows its own.
+ * Accept only when they match: a different code means someone on the network sits between the two phones.
+ *
+ * A retry of the same join can move the request to a new connection with a new [checkCode] under the same [id]. Answer
+ * with both values from the same [JoinRequest] (`acceptRequest(id, checkCode)`), so an answer for the code the host
+ * compared never reaches a connection whose code it did not see. (A retry that shows a code the request showed before
+ * is dropped; a later try is a new request with a new id. An empty code, a Room with no secure channel, checks nothing.)
  */
 public data class JoinRequest(val id: Int, val name: String, val checkCode: String)
 
@@ -91,7 +95,10 @@ public class Room<S, M, V>(
         var heldToken: String? = null
     }
 
-    private class Pending(val id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?)
+    private class Pending(val id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?) {
+        /** Every code this request has shown; a retry must not show one again under the same id. */
+        val shownCodes = mutableSetOf(checkCode)
+    }
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -207,8 +214,38 @@ public class Room<S, M, V>(
         drop(seat)
     }
 
+    /**
+     * Accepts request [id] only while it still shows [checkCode], the code the host compared; otherwise it answers
+     * nothing. Like every room call it first times out old requests (not while [isPaused]).
+     */
+    public fun acceptRequest(id: Int, checkCode: String): List<RoomOutput> = answerRequest(id, checkCode, accept = true).first
+
+    /** Declines request [id] only while it still shows [checkCode]; see [acceptRequest]. */
+    public fun declineRequest(id: Int, checkCode: String): List<RoomOutput> = answerRequest(id, checkCode, accept = false).first
+
+    /** The outputs, and whether this call took request [id] showing [checkCode] off the list. */
+    internal fun answerRequest(id: Int, checkCode: String, accept: Boolean): Pair<List<RoomOutput>, Boolean> {
+        var took = false
+        val outputs = step {
+            val p = pending.find { it.id == id && it.checkCode == checkCode } ?: return@step
+            pending.remove(p)
+            took = true
+            if (accept) seat(p) else decline(p)
+        }
+        return outputs to took
+    }
+
+    @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")
     public fun acceptJoin(id: Int): List<RoomOutput> = step {
-        val p = takeRequest(id) ?: return@step
+        takeRequest(id)?.let(::seat)
+    }
+
+    @Deprecated("Does not check the code the host compared. Use declineRequest(id, checkCode).")
+    public fun declineJoin(id: Int): List<RoomOutput> = step {
+        takeRequest(id)?.let(::decline)
+    }
+
+    private fun seat(p: Pending) {
         when {
             phase != Phase.LOBBY -> refuse(p.conn, RefuseReason.GAME_STARTED, GAME_STARTED)
             seats.size >= config.maxSeats -> refuse(p.conn, RefuseReason.ROOM_FULL, ROOM_FULL)
@@ -219,9 +256,7 @@ public class Room<S, M, V>(
         }
     }
 
-    public fun declineJoin(id: Int): List<RoomOutput> = step {
-        takeRequest(id)?.let { refuse(it.conn, RefuseReason.DECLINED, "The host did not let you in.") }
-    }
+    private fun decline(p: Pending) = refuse(p.conn, RefuseReason.DECLINED, "The host did not let you in.")
 
     public fun start(seed: Long): List<RoomOutput> = step {
         if (!canStart) return@step
@@ -282,6 +317,14 @@ public class Room<S, M, V>(
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = checkCodeOf(conn)
+                if (p.checkCode.isNotEmpty() && !p.shownCodes.add(p.checkCode)) {
+                    // The new connection shows a code this request showed before (six digits: rare), so an answer the
+                    // host meant for an earlier connection could reach it. Drop the request; a later try by the joiner,
+                    // if it comes, is a new request with a new id.
+                    pending.remove(p)
+                    out += RoomOutput.Close(conn)
+                    return
+                }
                 if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
             }

@@ -18,10 +18,10 @@ class ApproveCodeJoinsTest {
     @Test
     fun givenApprovingRoom_whenCodeJoinThenHostAccepts_thenWaitsWithoutSeatAndIsSeatedOnAccept() {
         assertEquals(listOf<HostMsg>(HostMsg.Waiting), h.hello("a", name = "Asha").to("a"), "told to wait, not closed")
-        assertEquals(listOf(JoinRequest(1, "Asha", "")), room.joinRequests)
+        assertEquals(listOf(JoinRequest(1, "Asha", "code-a")), room.joinRequests)
         assertEquals(1, room.seatCount)
 
-        assertEquals(1, room.acceptJoin(1).welcome("a").lobby.yourSeat)
+        assertEquals(1, h.accept(1).welcome("a").lobby.yourSeat)
         assertEquals(2, room.seatCount)
         assertEquals(emptyList(), room.joinRequests)
     }
@@ -45,7 +45,7 @@ class ApproveCodeJoinsTest {
     @Test
     fun givenApprovingRoom_whenHostDeclinesACodeJoin_thenRefusedDeclinedAndNoSeat() {
         h.hello("a")
-        assertEquals(RefuseReason.DECLINED, refusal(room.declineJoin(1), "a"))
+        assertEquals(RefuseReason.DECLINED, refusal(h.decline(1), "a"))
         assertEquals(1, room.seatCount)
     }
 
@@ -58,7 +58,7 @@ class ApproveCodeJoinsTest {
     @Test
     fun givenAcceptedCodeJoin_whenDropsAndReconnectsWithToken_thenSameSeatWithoutANewRequest() {
         h.hello("a", name = "Asha")
-        val token = room.acceptJoin(1).welcome("a").reconnectToken
+        val token = h.accept(1).welcome("a").reconnectToken
         room.onDisconnect("a")
         assertEquals("Asha", h.hello("a2", token = token).welcome("a2").lobby.seats[1].name)
         assertEquals(emptyList(), room.joinRequests)

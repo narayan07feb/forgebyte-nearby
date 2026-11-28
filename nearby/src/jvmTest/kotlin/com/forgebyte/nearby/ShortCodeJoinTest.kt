@@ -45,7 +45,7 @@ class ShortCodeJoinTest {
             val request = host.joinRequests.first { it.isNotEmpty() }.single()
             assertEquals("Asha", request.name)
             assertEquals(request.checkCode, c.checkCode.value)
-            host.acceptJoin(request.id)
+            host.acceptRequest(request.id, request.checkCode)
             c.status.first { it == ClientStatus.Connected }
             assertEquals(1, c.lobby.value!!.yourSeat)
             host.lobby.first { it.seats.size == 2 }
@@ -63,7 +63,7 @@ class ShortCodeJoinTest {
             assertEquals(ClientStatus.WaitingForHost, c.status.value)
             assertNull(c.lobby.value)
             assertEquals(1, host.lobby.value.seats.size)
-            host.declineJoin(host.joinRequests.value.single().id)
+            host.joinRequests.value.single().let { host.declineRequest(it.id, it.checkCode) }
             val end = c.status.first { it is ClientStatus.Ended } as ClientStatus.Ended
             assertEquals(RefuseReason.DECLINED, (end.reason as EndReason.Refused).reason)
             assertEquals(1, host.lobby.value.seats.size)
