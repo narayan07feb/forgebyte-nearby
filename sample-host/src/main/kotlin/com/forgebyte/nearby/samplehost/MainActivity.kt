@@ -120,7 +120,7 @@ class MainActivity : Activity() {
                 room.joinRequests.collect { list ->
                     list.forEach {
                         say("request ${it.id} from ${it.name}, check code ${it.checkCode}: ${if (decline) "declining" else "accepting"}")
-                        if (decline) room.declineJoin(it.id, it.checkCode) else room.acceptJoin(it.id, it.checkCode)
+                        if (decline) room.declineRequest(it.id, it.checkCode) else room.acceptRequest(it.id, it.checkCode)
                     }
                 }
             }

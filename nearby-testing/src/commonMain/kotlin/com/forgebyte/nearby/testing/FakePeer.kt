@@ -12,6 +12,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -46,10 +47,11 @@ public class FakePeer<M, V>(
      */
     public fun join(host: NearbyHost<*, M, V>, port: Int, autoAccept: Boolean = true): Job = scope.launch {
         client.requestJoin(RoomAd("fake-peer", name, gameId, PROTOCOL_VERSION, gameVersion, 1, LOOPBACK, port), name)
+        // Accepts the request that shows this peer's current code; a retry moves it (new id, new code), so try again.
         if (autoAccept) launch {
-            val code = client.checkCode.filterNotNull().first()
-            val request = host.joinRequests.first { r -> r.any { it.checkCode == code } }.first { it.checkCode == code }
-            host.acceptJoin(request.id, code)
+            combine(client.checkCode.filterNotNull(), host.joinRequests) { code, requests -> requests.find { it.checkCode == code } }
+                .filterNotNull()
+                .first { host.acceptRequest(it.id, it.checkCode) }
         }
         launch {
             client.status.first { it == ClientStatus.Connected }

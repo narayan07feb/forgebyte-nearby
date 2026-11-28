@@ -51,8 +51,9 @@ public class RoomConfig(
  * Someone asking to join. The host's screen shows [checkCode] next to the name; the joiner's screen shows its own.
  * Accept only when they match: a different code means someone on the network sits between the two phones.
  *
- * Answer with both [id] and the [checkCode] the host saw (`acceptJoin(id, checkCode)`): a retry of the same join can
- * move the request to a new connection with a new code under the same [id], and the room then ignores the answer.
+ * [id] names this request on this connection. A retry of the same join that moves the request to a new connection gets
+ * a new [id] (and a new [checkCode]), in the same place in the list, so an answer for what the host saw before cannot
+ * reach the new connection. Answer with both: `acceptRequest(id, checkCode)` or `declineRequest(id, checkCode)`.
  */
 public data class JoinRequest(val id: Int, val name: String, val checkCode: String)
 
@@ -93,7 +94,7 @@ public class Room<S, M, V>(
         var heldToken: String? = null
     }
 
-    private class Pending(val id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?)
+    private class Pending(var id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?)
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -210,19 +211,18 @@ public class Room<S, M, V>(
     }
 
     /**
-     * Accepts request [id] only while its check code is still [checkCode], the one the host compared. When a retry
-     * moved the request to a new connection with another code, this does nothing and the request stays, with its new
-     * code, in [joinRequests].
+     * Accepts request [id] only while it still shows [checkCode], the code the host compared. Otherwise (the request is
+     * gone, timed out, or moved to a new connection with a new id) it does nothing.
      */
-    public fun acceptJoin(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::seat) }
+    public fun acceptRequest(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::seat) }
 
-    /** Declines request [id] only while its check code is still [checkCode]; see [acceptJoin]. */
-    public fun declineJoin(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::decline) }
+    /** Declines request [id] only while it still shows [checkCode]; see [acceptRequest]. */
+    public fun declineRequest(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::decline) }
 
-    @Deprecated("Can seat a connection whose check code the host never saw. Use acceptJoin(id, checkCode).")
+    @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")
     public fun acceptJoin(id: Int): List<RoomOutput> = step { takeRequest(id)?.let(::seat) }
 
-    @Deprecated("Can decline a newer connection than the one the host saw. Use declineJoin(id, checkCode).")
+    @Deprecated("Does not check the code the host compared. Use declineRequest(id, checkCode).")
     public fun declineJoin(id: Int): List<RoomOutput> = step { takeRequest(id)?.let(::decline) }
 
     private fun seat(p: Pending) {
@@ -298,6 +298,7 @@ public class Room<S, M, V>(
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = checkCodeOf(conn)
+                p.id = nextRequest++ // an answer for the old connection must not reach this one
                 if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
             }

@@ -73,7 +73,7 @@ public class NearbyHost<S, M, V>(
     public val canStart: StateFlow<Boolean> = _canStart.asStateFlow()
 
     private val _joinRequests = MutableStateFlow<List<JoinRequest>>(emptyList())
-    /** People asking to join; answer each with `acceptJoin(id, checkCode)` or `declineJoin(id, checkCode)`. */
+    /** People asking to join; answer each with [acceptRequest] or [declineRequest]. */
     public val joinRequests: StateFlow<List<JoinRequest>> = _joinRequests.asStateFlow()
 
     private val _turnTimer = MutableStateFlow<TurnTimer?>(null)
@@ -142,24 +142,27 @@ public class NearbyHost<S, M, V>(
     }
 
     /**
-     * Accepts join request [id] only while its check code is still [checkCode], the code the host compared with the
-     * joiner's screen. The code is checked under the room lock, so a retry that moved the request to a new connection
-     * (a new code under the same id) cannot be seated by this answer; the request stays in [joinRequests] with its
-     * new code for the host to check again.
+     * Accepts join request [id] only while it still shows [checkCode], the code the host compared with the joiner's
+     * screen. Pass both from the same [JoinRequest]. The check and the answer happen under the room lock, so a retry
+     * that moved the request to a new connection (it then has a new id and a new code) cannot be seated by this call.
      *
-     * Returns true when it answered that request. The joiner then has a seat, or is refused because the game started
-     * or the room filled meanwhile ([lobby] shows which). False: no request with this id and code (gone, timed out,
-     * or its code changed); nothing was done.
+     * Returns true when this call took that request off [joinRequests]: the joiner gets the seat, or, when the room
+     * filled up meanwhile, is refused as full. Returns false when no request has this id and code (it moved, timed out,
+     * was declined, the game started, or the room closed); then nothing was done for it. The same call can still time
+     * out other old requests.
      */
-    public suspend fun acceptJoin(id: Int, checkCode: String): Boolean = answer { acceptJoin(id, checkCode) }
+    public suspend fun acceptRequest(id: Int, checkCode: String): Boolean = answer { acceptRequest(id, checkCode) }
 
-    /** Declines join request [id] only while its check code is still [checkCode]; returns as [acceptJoin] does. */
-    public suspend fun declineJoin(id: Int, checkCode: String): Boolean = answer { declineJoin(id, checkCode) }
+    /**
+     * Declines join request [id] only while it still shows [checkCode]; see [acceptRequest]. Returns true when this
+     * call declined it (the joiner is told the host did not let them in), false when no request has this id and code.
+     */
+    public suspend fun declineRequest(id: Int, checkCode: String): Boolean = answer { declineRequest(id, checkCode) }
 
-    @Deprecated("Can seat a connection whose check code the host never saw. Use acceptJoin(id, checkCode).")
+    @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")
     public suspend fun acceptJoin(id: Int): Unit = act { acceptJoin(id) }
 
-    @Deprecated("Can decline a newer connection than the one the host saw. Use declineJoin(id, checkCode).")
+    @Deprecated("Does not check the code the host compared. Use declineRequest(id, checkCode).")
     public suspend fun declineJoin(id: Int): Unit = act { declineJoin(id) }
 
     private suspend fun answer(call: Room<S, M, V>.() -> List<RoomOutput>): Boolean {

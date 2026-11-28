@@ -6,17 +6,18 @@ import kotlinx.serialization.json.JsonElement
 class Harness<S, M, V>(
     game: NearbyGame<S, M, V>,
     val config: RoomConfig = config(),
+    /** Each connection's check code; by default "code-<conn>", so a retry on a new connection gets a new code. */
+    checkCodeOf: (conn: String) -> String = { "code-$it" },
 ) {
     var now = 0L
     private var tokens = 0
-    /** Each connection's check code is "code-<conn>", so a retry on a new connection gets a new code. */
-    val room = Room(game, config, clock = { now }, newToken = { "tok${++tokens}" }, checkCodeOf = { "code-$it" })
+    val room = Room(game, config, clock = { now }, newToken = { "tok${++tokens}" }, checkCodeOf = checkCodeOf)
 
     /** Accepts request [id] with the check code it shows now, as a host that just compared it. */
-    fun accept(id: Int) = room.acceptJoin(id, codeOf(id))
+    fun accept(id: Int) = room.acceptRequest(id, codeOf(id))
 
     /** Declines request [id] with the check code it shows now. */
-    fun decline(id: Int) = room.declineJoin(id, codeOf(id))
+    fun decline(id: Int) = room.declineRequest(id, codeOf(id))
 
     /** The code request [id] shows; one that is not there gets a code no request has, so the answer does nothing. */
     private fun codeOf(id: Int) = room.joinRequests.find { it.id == id }?.checkCode ?: "no such request"

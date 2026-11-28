@@ -3,7 +3,6 @@ package com.forgebyte.nearby
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -35,10 +34,12 @@ class CutBeforeWelcomeTest {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val host = NearbyHost(FakeGame(), Harness.config(), scope)
+    private val relays = mutableListOf<CutRelay>()
 
     @AfterTest
     fun tearDown() = runBlocking {
         withTimeoutOrNull(10.seconds) { host.leave() }
+        relays.forEach { it.close() }
         scope.cancel()
     }
 
@@ -46,15 +47,22 @@ class CutBeforeWelcomeTest {
      * A loopback relay in front of the host. On connection number [cutOn] it passes everything to the host, and from
      * the host only the HTTP upgrade and the key exchange reply; when the host's first encrypted frame (the Welcome)
      * arrives it cuts both sockets, as if Wi-Fi dropped right then. With [hold] it keeps that frame back until
-     * [release] instead of cutting. Other connections pass untouched.
+     * [release] instead of cutting. Other connections pass untouched. With [halfOpen] the relay never closes the host
+     * side of that connection (see [cutFirstJoinerSide]) until [close].
      */
-    private class CutRelay(target: Int, private val cutOn: Int = 0, private val hold: Boolean = false) {
+    private class CutRelay(
+        target: Int,
+        private val cutOn: Int = 0,
+        private val hold: Boolean = false,
+        private val halfOpen: Boolean = false,
+    ) {
         private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
         val port: Int = server.localPort
         val connections = AtomicInteger()
         val held = CountDownLatch(1)
         val release = CountDownLatch(1)
         private val firstSockets = mutableListOf<Socket>()
+        private val allSockets = java.util.Collections.synchronizedList(mutableListOf<Socket>())
 
         /** Cuts the first connection now, as if Wi-Fi dropped (both ends see the socket close). */
         fun cutFirst() = synchronized(firstSockets) { firstSockets.forEach { runCatching { it.close() } } }
@@ -63,16 +71,23 @@ class CutBeforeWelcomeTest {
         private val keptOpen = java.util.Collections.synchronizedSet(mutableSetOf<Socket>())
 
         /**
-         * Cuts the first connection on the joiner's side only. The host's socket stays open, as when Wi-Fi drops and
-         * the host has not noticed yet, so the joiner's retry arrives while the host still holds the old connection.
+         * Needs [halfOpen]. Cuts the first connection on the joiner's side only. The host's socket stays open, as when
+         * Wi-Fi drops and the host has not noticed yet, so the joiner's retry arrives while the host still holds the
+         * old connection.
          */
         fun cutFirstJoinerSide() = synchronized(firstSockets) {
-            keptOpen += firstSockets[1]
+            check(halfOpen && firstSockets[1] in keptOpen) { "make the relay with halfOpen = true" }
             runCatching { firstSockets[0].close() }
         }
 
         private fun close(socket: Socket) {
             if (socket !in keptOpen) runCatching { socket.close() }
+        }
+
+        /** Stops the relay: its listener and every socket, the kept host sockets too. */
+        fun close() {
+            runCatching { server.close() }
+            synchronized(allSockets) { allSockets.forEach { runCatching { it.close() } } }
         }
 
         init {
@@ -81,7 +96,11 @@ class CutBeforeWelcomeTest {
                     val joiner = runCatching { server.accept() }.getOrNull() ?: break
                     val toHost = Socket(InetAddress.getLoopbackAddress(), target)
                     val first = connections.getAndIncrement() == cutOn
-                    if (first) synchronized(firstSockets) { firstSockets += listOf(joiner, toHost) }
+                    allSockets += listOf(joiner, toHost)
+                    if (first) synchronized(firstSockets) {
+                        firstSockets += listOf(joiner, toHost)
+                        if (halfOpen) keptOpen += toHost // before any pump can close it
+                    }
                     pump(joiner.getInputStream(), toHost, joiner) // joiner -> host, untouched
                     if (first) cutAtFirstBinary(toHost.getInputStream(), joiner, toHost) else pump(toHost.getInputStream(), joiner, toHost)
                 }
@@ -138,7 +157,7 @@ class CutBeforeWelcomeTest {
         if (request) {
             c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, relay.port), "Asha")
             // Accept each request as it comes; with the cut, the first answer is lost with its socket.
-            scope.launch { host.joinRequests.collect { list -> list.forEach { host.acceptJoin(it.id, it.checkCode) } } }
+            scope.launch { host.joinRequests.collect { list -> list.forEach { host.acceptRequest(it.id, it.checkCode) } } }
         } else {
             c.join(JoinCode(LOOPBACK, relay.port, Harness.SECRET, host.fingerprint!!), "Asha")
         }
@@ -173,7 +192,7 @@ class CutBeforeWelcomeTest {
         kotlinx.coroutines.delay(300) // let a late close of the first socket land: still one entry
         assertEquals(1, host.joinRequests.value.size, "the approval list shows Asha once: ${host.joinRequests.value}")
         val request = host.joinRequests.value.single()
-        assertTrue(host.acceptJoin(request.id, request.checkCode))
+        assertTrue(host.acceptRequest(request.id, request.checkCode))
         val status = withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected || it is ClientStatus.Ended } }
         assertEquals(ClientStatus.Connected, status, "the approval reached the retried connection (first entry was ${requests.single()})")
         assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name })
@@ -181,31 +200,33 @@ class CutBeforeWelcomeTest {
 
     /**
      * The host compared the first connection's code, then the joiner's retry moved the request to a new connection
-     * (new code, same id) before the host tapped. The answer with the old code must do nothing; the host sees the
-     * new code and answers again. [decline]: the same with Decline.
+     * (new id, new code) while the host still held the old socket, before the host tapped. The answer for what the host
+     * saw must do nothing; the host sees the new request and answers it. [decline]: the same with Decline.
      */
     private suspend fun answerAfterRetry(decline: Boolean) {
         val port = host.open(bindHost = LOOPBACK)
-        val relay = CutRelay(port)
+        val relay = CutRelay(port, halfOpen = true).also { relays += it }
         val c = joiner()
         c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, relay.port), "Asha")
         val seen = withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.isNotEmpty() } }?.single() ?: error("no request")
         relay.cutFirstJoinerSide()
-        val moved = withTimeoutOrNull(15.seconds) { host.joinRequests.first { r -> r.any { it.id == seen.id && it.checkCode != seen.checkCode } } }
+        val moved = withTimeoutOrNull(15.seconds) { host.joinRequests.first { r -> r.any { it.id != seen.id } } }
             ?.single() ?: error("no retry: ${host.joinRequests.value}")
-        val answered = if (decline) host.declineJoin(seen.id, seen.checkCode) else host.acceptJoin(seen.id, seen.checkCode)
+        assertNotEquals(seen.checkCode, moved.checkCode, "a new channel, a new code")
+        val answered = if (decline) host.declineRequest(seen.id, seen.checkCode) else host.acceptRequest(seen.id, seen.checkCode)
         assertFalse(answered, "the answer for the code the host saw does not reach the new connection")
         kotlinx.coroutines.delay(300) // a wrong seat or refusal would have reached the joiner by now
         assertEquals(ClientStatus.WaitingForHost, c.status.value)
         assertEquals(listOf("Host"), host.lobby.value.seats.map { it.name })
-        assertEquals(listOf(moved), host.joinRequests.value, "the request stays, with the new code, for the host to check")
+        assertEquals(listOf(moved), host.joinRequests.value, "the new request stays for the host to check")
         assertEquals(moved.checkCode, c.checkCode.value, "the joiner's screen shows the new code too")
         if (decline) {
-            assertTrue(host.declineJoin(moved.id, moved.checkCode))
-            assertTrue(withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } } != null)
+            assertTrue(host.declineRequest(moved.id, moved.checkCode))
+            val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } } as? ClientStatus.Ended
+            assertEquals(RefuseReason.DECLINED, (end?.reason as? EndReason.Refused)?.reason, "ended as $end")
             assertEquals(listOf("Host"), host.lobby.value.seats.map { it.name })
         } else {
-            assertTrue(host.acceptJoin(moved.id, moved.checkCode))
+            assertTrue(host.acceptRequest(moved.id, moved.checkCode))
             assertEquals(ClientStatus.Connected, withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected } })
             assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name })
         }
@@ -222,34 +243,61 @@ class CutBeforeWelcomeTest {
         answerAfterRetry(decline = true)
     }
 
+    @Test
+    fun givenRequestJoin_whenHostAnswersWithACodeTheRequestDoesNotShow_thenNothingHappensAndFalse() = runBlocking<Unit> {
+        val port = host.open(bindHost = LOOPBACK)
+        val c = joiner()
+        c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, port), "Asha")
+        val seen = withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.isNotEmpty() } }?.single() ?: error("no request")
+        val other = if (seen.checkCode == "000000") "000001" else "000000"
+        assertFalse(host.acceptRequest(seen.id, other))
+        assertFalse(host.declineRequest(seen.id, other))
+        kotlinx.coroutines.delay(300) // a wrong seat or refusal would have reached the joiner by now
+        assertEquals(ClientStatus.WaitingForHost, c.status.value)
+        assertEquals(listOf("Host"), host.lobby.value.seats.map { it.name })
+        assertEquals(listOf(seen), host.joinRequests.value)
+        assertFalse(host.acceptRequest(seen.id + 100, seen.checkCode), "an id no request has")
+    }
+
     /**
-     * Accept and the retry run at the same time, many rounds, so either can take the room lock first. Whatever the
-     * order, true means Asha got a seat, and false means nobody did and the request now shows another code.
+     * The joiner's link drops (half-open on the host) and the host taps Accept for what it saw at set times around the
+     * joiner's retry, from at once to well after it. Each round lands on one of two orders, and the test needs both:
+     * Accept first (true, Asha keeps that seat and the retry takes it back, no second request), or the retry first
+     * (false, nobody seated, a new request waits).
      */
     @Test
-    fun givenAcceptAndRetryAtOnce_whenEitherWinsTheLock_thenTrueSeatsAndFalseLeavesTheNewCode() = runBlocking<Unit> {
-        repeat(10) { round ->
+    fun givenAcceptAtTimesAroundTheRetry_whenEitherComesFirst_thenTrueMeansThatSeatAndFalseMeansANewRequest() = runBlocking<Unit> {
+        val orders = mutableListOf<Boolean>()
+        for ((round, wait) in listOf(0L, 0L, 20L, 100L, 300L, 2_000L, 2_500L, 3_000L).withIndex()) {
             val h = NearbyHost(FakeGame(), Harness.config(), scope)
             try {
-                val relay = CutRelay(h.open(bindHost = LOOPBACK))
+                val relay = CutRelay(h.open(bindHost = LOOPBACK), halfOpen = true).also { relays += it }
                 val c = joiner()
+                val ids = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+                val watch = scope.launch { h.joinRequests.collect { r -> ids += r.map { it.id } } }
                 c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, relay.port), "Asha")
                 val seen = withTimeoutOrNull(10.seconds) { h.joinRequests.first { it.isNotEmpty() } }?.single() ?: error("no request")
-                val accept = scope.async { h.acceptJoin(seen.id, seen.checkCode) }
                 relay.cutFirstJoinerSide()
-                if (accept.await()) {
-                    // Seated on the first connection; the retry takes that seat back with its join id.
+                kotlinx.coroutines.delay(wait)
+                val first = h.acceptRequest(seen.id, seen.checkCode)
+                orders += first
+                if (first) {
                     assertEquals(ClientStatus.Connected, withTimeoutOrNull(15.seconds) { c.status.first { it == ClientStatus.Connected } }, "round $round")
+                    kotlinx.coroutines.delay(300)
                     assertEquals(listOf("Host", "Asha"), h.lobby.value.seats.map { it.name }, "round $round")
+                    assertEquals(setOf(seen.id), ids.toSet(), "round $round: the retry took the seat back, no new request")
                 } else {
                     assertEquals(listOf("Host"), h.lobby.value.seats.map { it.name }, "round $round")
-                    val now = h.joinRequests.value.single { it.id == seen.id }
-                    assertNotEquals(seen.checkCode, now.checkCode, "round $round: false only when the code changed")
+                    assertEquals(ClientStatus.WaitingForHost, c.status.value, "round $round")
+                    val now = h.joinRequests.value.single()
+                    assertNotEquals(seen.id, now.id, "round $round: false only when the request moved")
                 }
+                watch.cancel()
             } finally {
                 withTimeoutOrNull(10.seconds) { h.leave() }
             }
         }
+        assertTrue(true in orders && false in orders, "both orders ran: $orders")
     }
 
     private fun joiner() = NearbyClient("fake", Harness.GAME_VERSION, FakeMove.serializer(), FakeView.serializer(), scope)

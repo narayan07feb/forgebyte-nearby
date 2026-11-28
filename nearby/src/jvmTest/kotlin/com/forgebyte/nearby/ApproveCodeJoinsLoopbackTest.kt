@@ -52,7 +52,7 @@ class ApproveCodeJoinsLoopbackTest {
             assertEquals(request.checkCode, c.checkCode.value)
             assertEquals(1, host.lobby.value.seats.size, "no seat before the host accepts")
 
-            host.acceptJoin(request.id, request.checkCode)
+            host.acceptRequest(request.id, request.checkCode)
             c.status.first { it == ClientStatus.Connected }
             assertEquals(1, c.lobby.value!!.yourSeat)
         }
@@ -75,7 +75,7 @@ class ApproveCodeJoinsLoopbackTest {
         withTimeout(20.seconds) {
             val c = client()
             c.join(JoinCode("127.0.0.1", host.open(bindHost = LOOPBACK), Harness.SECRET, host.fingerprint!!), "Asha")
-            host.joinRequests.first { it.isNotEmpty() }.single().let { host.declineJoin(it.id, it.checkCode) }
+            host.joinRequests.first { it.isNotEmpty() }.single().let { host.declineRequest(it.id, it.checkCode) }
             val end = c.status.first { it is ClientStatus.Ended } as ClientStatus.Ended
             assertEquals(RefuseReason.DECLINED, (end.reason as EndReason.Refused).reason)
         }
