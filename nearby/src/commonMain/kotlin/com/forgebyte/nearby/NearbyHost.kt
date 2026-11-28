@@ -62,6 +62,7 @@ public class NearbyHost<S, M, V>(
     /** open() runs whole under this lock and leave() marks the room left under it: a leave waits for an open. */
     private val lifeLock = Mutex()
     private var left = false
+    private var opened = false
     internal var afterServerStart: suspend (port: Int) -> Unit = {} // tests stop open() here, after the server started
     private val wake = Channel<Unit>(Channel.CONFLATED) // tells the ticker to read the room's next wake time again
     internal var randomBytes: (Int) -> ByteArray = ::secureRandomBytes // replaced only by tests
@@ -96,14 +97,14 @@ public class NearbyHost<S, M, V>(
      * to listen on: all interfaces by default (joiners on the Wi-Fi); tests use "127.0.0.1" so a port held on loopback
      * by another program on a Mac cannot answer instead of us (seen 2026-11-03: a JetBrains process answered 404).
      *
-     * Call it once. If the call is cancelled before it has set up the room, the server is stopped again and this throws
-     * [CancellationException] (a coroutine that called it just ends); once set up, the room is open and [leave] closes
-     * it, even when the caller was cancelled in the last instant. A [leave] during it waits for it and then closes
+     * Call it once. If the call is cancelled before it returns, the server and the room's timer are stopped again and this
+     * throws [CancellationException] (a coroutine that called it just ends). A [leave] during it waits for it and then closes
      * the room; after [leave] it binds nothing and throws [CancellationException].
      */
     public suspend fun open(port: Int = 0, bindHost: String = "0.0.0.0"): Int = lifeLock.withLock {
         if (left) throw CancellationException("the room was left before it opened")
-        check(stopServer == null) { "open() was already called on this host" }
+        check(!opened) { "open() was already called on this host" }
+        opened = true
         hostKey = HostKey.create() // new for this room, kept only in memory
         val server = embeddedServer(CIO, port = port, host = bindHost) {
             install(WebSockets) {
@@ -117,7 +118,6 @@ public class NearbyHost<S, M, V>(
             server.startSuspend(wait = false)
             val bound = server.engine.resolvedConnectors().first().port
             afterServerStart(bound)
-            currentCoroutineContext().ensureActive() // the last point a cancel can still undo the start
             stopServer = { server.stopSuspend(500, 1_000) }
             // Wake exactly when the room next has something due (a paced bot move, a turn deadline), at least every
             // second, and early when a room call moved that time sooner (a move with botDelayMs under a second).
@@ -129,10 +129,15 @@ public class NearbyHost<S, M, V>(
                     wake.tryReceive() // this tick's own signal; the next wait is read fresh under the lock
                 }
             }
+            currentCoroutineContext().ensureActive() // the last point: a cancel up to here undoes the whole setup
             bound
         } catch (e: Throwable) {
-            // Cancelled before the room was set up: no listening socket may stay behind.
-            withContext(NonCancellable) { server.stopSuspend(500, 1_000) }
+            // Cancelled before open() returned: no listening socket or ticker may stay behind.
+            withContext(NonCancellable) {
+                jobs.forEach { it.cancel() }
+                stopServer = null
+                server.stopSuspend(500, 1_000)
+            }
             throw e
         }
     }

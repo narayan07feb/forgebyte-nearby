@@ -17,7 +17,6 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /** How a joiner ends: leaving, being torn down by the app, and who may clear the saved seat. */
@@ -41,17 +40,12 @@ class ClientLifecycleTest {
         private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
         val port: Int = server.localPort
         @Volatile var closed = false
-        /** Connections the gate took, refused or not. */
-        val accepted = java.util.concurrent.atomic.AtomicInteger()
-        /** While set, both directions drop every byte but keep the sockets open: a link that went silent. */
-        @Volatile var silent = false
         private val sockets = java.util.Collections.synchronizedList(mutableListOf<Socket>())
 
         init {
             thread(isDaemon = true) {
                 while (true) {
                     val joiner = runCatching { server.accept() }.getOrNull() ?: break
-                    accepted.incrementAndGet()
                     if (closed) { runCatching { joiner.close() }; continue }
                     val toHost = Socket(InetAddress.getLoopbackAddress(), target)
                     sockets += listOf(joiner, toHost)
@@ -67,7 +61,7 @@ class ClientLifecycleTest {
                 while (true) {
                     val n = from.getInputStream().read(buf)
                     if (n < 0) break
-                    if (!silent) to.getOutputStream().write(buf, 0, n)
+                    to.getOutputStream().write(buf, 0, n)
                 }
             }
             runCatching { to.close() }
@@ -114,82 +108,6 @@ class ClientLifecycleTest {
         val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } } as? ClientStatus.Ended
         assertEquals(RefuseReason.RECONNECT_EXPIRED, (end?.reason as? EndReason.Refused)?.reason, "ended as $end")
         assertEquals(null, store.load(), "the resumed seat was this client's, so the refusal clears it")
-    }
-
-    @Test
-    fun givenLinkDown_whenThePlayerLeaves_thenTheClientEndsLeftAndDoesNotComeBack() = runBlocking<Unit> {
-        val store = InMemorySeatStore()
-        val gate = Gate(host.open(bindHost = LOOPBACK)).also { gates += it }
-        val c = client(store)
-        c.joinedVia(gate.port)
-        gate.closed = true // the host is out of reach
-        c.dropForTest()
-        withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Reconnecting } } ?: error("no reconnect: ${c.status.value}")
-        val hellos = java.util.concurrent.atomic.AtomicInteger()
-        traceSink = { if (it.startsWith("host: ") && it.contains(" hello ")) hellos.incrementAndGet() }
-        try {
-            c.leave()
-            gate.closed = false // the host is back: a client that ignores leave() reconnects now
-            val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } }
-            assertEquals(ClientStatus.Ended(EndReason.Left), end)
-            delay(500)
-            assertEquals(0, hellos.get(), "no hello reached the host after leave()")
-        } finally {
-            traceSink = null
-        }
-        assertEquals(null, store.load(), "a left seat is not kept")
-    }
-
-    @Test
-    fun givenWaitingToRetry_whenThePlayerLeaves_thenTheClientEndsAtOnceNotAfterTheRetryWait() = runBlocking<Unit> {
-        val gate = Gate(host.open(bindHost = LOOPBACK)).also { gates += it }
-        val c = client(InMemorySeatStore())
-        c.joinedVia(gate.port)
-        gate.closed = true
-        val failed = kotlinx.coroutines.CompletableDeferred<Unit>()
-        traceSink = { if (it.startsWith("joiner: attempt failed")) failed.complete(Unit) }
-        try {
-            c.dropForTest()
-            withTimeoutOrNull(10.seconds) { failed.await() } ?: error("no failed attempt: ${c.status.value}")
-            delay(100) // past the end-of-attempt checks, into the wait
-            val t0 = kotlin.time.TimeSource.Monotonic.markNow()
-            c.leave() // now in the 1 s wait before the next try
-            val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } }
-            assertEquals(ClientStatus.Ended(EndReason.Left), end)
-            withTimeoutOrNull(5.seconds) { c.httpClosed.join() } ?: error("the client was never closed")
-            assertTrue(t0.elapsedNow() < 500.milliseconds, "closed ${t0.elapsedNow()} after leave(), the retry wait is 1 s")
-            val tries = gate.accepted.get()
-            delay(1_500) // longer than the retry wait
-            assertEquals(tries, gate.accepted.get(), "no connect attempt after leave()")
-        } finally {
-            traceSink = null
-        }
-    }
-
-    @Test
-    fun givenAResumeJustStarted_whenThePlayerLeavesAtOnce_thenTheResumedSeatIsCleared() = runBlocking<Unit> {
-        val gate = Gate(host.open(bindHost = LOOPBACK)).also { gates += it }
-        gate.closed = true // the host is out of reach, so the resume is still trying
-        val seat = SavedSeat(LOOPBACK, gate.port, host.fingerprint!!, "fake", "Asha", "resumed-token")
-        val store = InMemorySeatStore().apply { save(seat) }
-        val c = client(store)
-        val job = c.resume(seat)
-        c.leave()
-        assertTrue(withTimeoutOrNull(5.seconds) { job.join() } != null, "the resume job ended")
-        assertEquals(ClientStatus.Ended(EndReason.Left), c.status.value)
-        assertEquals(null, store.load(), "the seat the client resumed is its own, so leaving clears it")
-    }
-
-    @Test
-    fun givenASilentLink_whenThePlayerLeaves_thenLeaveReturnsSoonAndTheClientEndsLeft() = runBlocking<Unit> {
-        val gate = Gate(host.open(bindHost = LOOPBACK)).also { gates += it }
-        val c = client(InMemorySeatStore())
-        c.joinedVia(gate.port)
-        gate.silent = true // the link looks up, but nothing gets through any more
-        val t0 = kotlin.time.TimeSource.Monotonic.markNow()
-        withTimeoutOrNull(8.seconds) { c.leave() } ?: error("leave() did not return on a silent link")
-        assertTrue(t0.elapsedNow() < 5.seconds, "leave() took ${t0.elapsedNow()}")
-        assertEquals(ClientStatus.Ended(EndReason.Left), withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } })
     }
 
     @Test
