@@ -48,7 +48,8 @@ public class FakePeer<M, V>(
         client.requestJoin(RoomAd("fake-peer", name, gameId, PROTOCOL_VERSION, gameVersion, 1, LOOPBACK, port), name)
         if (autoAccept) launch {
             val code = client.checkCode.filterNotNull().first()
-            host.acceptJoin(host.joinRequests.first { r -> r.any { it.checkCode == code } }.first { it.checkCode == code }.id)
+            val request = host.joinRequests.first { r -> r.any { it.checkCode == code } }.first { it.checkCode == code }
+            host.acceptJoin(request.id, code)
         }
         launch {
             client.status.first { it == ClientStatus.Connected }

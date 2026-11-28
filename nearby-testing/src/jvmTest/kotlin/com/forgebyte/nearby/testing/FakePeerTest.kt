@@ -62,7 +62,7 @@ class FakePeerTest {
             assertEquals(p.client.checkCode.value, request.checkCode)
             delay(300)
             assertEquals(1, host.lobby.value.seats.size) // nothing seats it but the host
-            host.acceptJoin(request.id)
+            host.acceptJoin(request.id, request.checkCode)
             host.canStart.first { it } // seated and ready by itself
             host.leave()
         }

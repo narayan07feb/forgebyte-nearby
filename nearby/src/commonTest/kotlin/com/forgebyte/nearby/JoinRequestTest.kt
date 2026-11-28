@@ -20,14 +20,14 @@ class JoinRequestTest {
         val out = h.request("a", name = "  Asha ")
 
         assertEquals(emptyList(), out, "nothing is sent until the host answers")
-        assertEquals(listOf(JoinRequest(1, "Asha", "")), room.joinRequests)
+        assertEquals(listOf(JoinRequest(1, "Asha", "code-a")), room.joinRequests)
         assertEquals(1, room.seatCount)
     }
 
     @Test
     fun givenRequest_whenHostAccepts_thenWelcomedAndSeated() {
         h.request("a", name = "Asha")
-        val out = room.acceptJoin(1)
+        val out = h.accept(1)
 
         val welcome = out.welcome("a")
         assertEquals(1, welcome.lobby.yourSeat)
@@ -39,7 +39,7 @@ class JoinRequestTest {
     @Test
     fun givenRequest_whenHostDeclines_thenRefusedDeclinedAndNoSeat() {
         h.request("a")
-        assertEquals(RefuseReason.DECLINED, refusal(room.declineJoin(1), "a"))
+        assertEquals(RefuseReason.DECLINED, refusal(h.decline(1), "a"))
         assertEquals(emptyList(), room.joinRequests)
         assertEquals(1, room.seatCount)
     }
@@ -54,7 +54,7 @@ class JoinRequestTest {
         h.now = Harness.REQUEST_TIMEOUT
         assertEquals(RefuseReason.REQUEST_TIMED_OUT, refusal(room.tick(), "a"))
         assertEquals(emptyList(), room.joinRequests)
-        assertEquals(emptyList(), room.acceptJoin(1), "a timed-out request cannot be accepted")
+        assertEquals(emptyList(), h.accept(1), "a timed-out request cannot be accepted")
     }
 
     @Test
@@ -78,7 +78,7 @@ class JoinRequestTest {
         h.request("a")
         room.onDisconnect("a")
         assertEquals(emptyList(), room.joinRequests)
-        assertEquals(emptyList(), room.acceptJoin(1))
+        assertEquals(emptyList(), h.accept(1))
     }
 
     @Test
@@ -105,7 +105,7 @@ class JoinRequestTest {
         val small = Harness(FakeGame(), Harness.config(maxSeats = 2))
         small.request("a")
         small.hello("b") // code join takes the last seat
-        val out = small.room.acceptJoin(1)
+        val out = small.accept(1)
         assertTrue(out.closed("a"))
         assertEquals(RefuseReason.ROOM_FULL, (out.to("a").single() as HostMsg.Refused).reason)
     }
@@ -133,7 +133,7 @@ class JoinRequestTest {
     @Test
     fun givenSeatJoinedByRequest_whenDropsAndReconnectsWithTokenOnly_thenSameSeat() {
         h.request("a", name = "Asha")
-        val token = room.acceptJoin(1).welcome("a").reconnectToken
+        val token = h.accept(1).welcome("a").reconnectToken
         room.onDisconnect("a")
         val out = h.hello("a2", token = token, secret = null)
         assertEquals("Asha", out.welcome("a2").lobby.seats[1].name)
@@ -142,7 +142,7 @@ class JoinRequestTest {
 
     @Test
     fun givenUnknownRequestId_whenAnswered_thenNothing() {
-        assertEquals(emptyList(), room.acceptJoin(42))
-        assertEquals(emptyList(), room.declineJoin(42))
+        assertEquals(emptyList(), h.accept(42))
+        assertEquals(emptyList(), h.decline(42))
     }
 }

@@ -32,7 +32,7 @@ public class FakeHost<S, M, V>(
     /** Opens the room on loopback (other phones cannot reach it) and returns what the game's joiner taps. */
     public suspend fun open(): RoomAd {
         val port = host.open(bindHost = LOOPBACK)
-        jobs += scope.launch { host.joinRequests.collect { requests -> requests.forEach { host.acceptJoin(it.id) } } }
+        jobs += scope.launch { host.joinRequests.collect { requests -> requests.forEach { host.acceptJoin(it.id, it.checkCode) } } }
         jobs += scope.launch {
             host.canStart.first { it }
             host.startGame()

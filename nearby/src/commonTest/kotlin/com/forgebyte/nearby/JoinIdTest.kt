@@ -61,7 +61,7 @@ class JoinIdTest {
         val out = h.request("a2", name = "Asha", joinId = "J1")
         assertTrue(out.closed("a"), "the old half-open socket is closed")
         assertEquals(listOf(1), room.joinRequests.map { it.id }, "one entry, same id")
-        val accepted = room.acceptJoin(1)
+        val accepted = h.accept(1)
         assertEquals(1, accepted.welcome("a2").lobby.yourSeat)
         assertEquals(listOf("Host", "Asha"), room.hostLobby.seats.map { it.name })
     }
@@ -72,13 +72,13 @@ class JoinIdTest {
         room.onDisconnect("a")
         h.request("a2", name = "Asha", joinId = "J1")
         assertEquals(1, room.joinRequests.size)
-        assertEquals(1, room.acceptJoin(room.joinRequests.single().id).welcome("a2").lobby.yourSeat)
+        assertEquals(1, h.accept(room.joinRequests.single().id).welcome("a2").lobby.yourSeat)
     }
 
     @Test
     fun givenRequestAcceptedButNoWelcome_whenRetryWithSameJoinId_thenSameSeat() {
         h.request("a", name = "Asha", joinId = "J1")
-        room.acceptJoin(1)
+        h.accept(1)
         room.onDisconnect("a")
         val out = h.request("a2", name = "Asha", joinId = "J1")
         assertEquals(1, out.welcome("a2").lobby.yourSeat)

@@ -48,9 +48,11 @@ public class RoomConfig(
 }
 
 /**
- * Someone asking to join; the host accepts or declines it by [id]. The host's screen shows [checkCode] next to the
- * name; the joiner's screen shows its own. Accept only when they match: a different code means someone on the
- * network sits between the two phones.
+ * Someone asking to join. The host's screen shows [checkCode] next to the name; the joiner's screen shows its own.
+ * Accept only when they match: a different code means someone on the network sits between the two phones.
+ *
+ * Answer with both [id] and the [checkCode] the host saw (`acceptJoin(id, checkCode)`): a retry of the same join can
+ * move the request to a new connection with a new code under the same [id], and the room then ignores the answer.
  */
 public data class JoinRequest(val id: Int, val name: String, val checkCode: String)
 
@@ -207,8 +209,23 @@ public class Room<S, M, V>(
         drop(seat)
     }
 
-    public fun acceptJoin(id: Int): List<RoomOutput> = step {
-        val p = takeRequest(id) ?: return@step
+    /**
+     * Accepts request [id] only while its check code is still [checkCode], the one the host compared. When a retry
+     * moved the request to a new connection with another code, this does nothing and the request stays, with its new
+     * code, in [joinRequests].
+     */
+    public fun acceptJoin(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::seat) }
+
+    /** Declines request [id] only while its check code is still [checkCode]; see [acceptJoin]. */
+    public fun declineJoin(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::decline) }
+
+    @Deprecated("Can seat a connection whose check code the host never saw. Use acceptJoin(id, checkCode).")
+    public fun acceptJoin(id: Int): List<RoomOutput> = step { takeRequest(id)?.let(::seat) }
+
+    @Deprecated("Can decline a newer connection than the one the host saw. Use declineJoin(id, checkCode).")
+    public fun declineJoin(id: Int): List<RoomOutput> = step { takeRequest(id)?.let(::decline) }
+
+    private fun seat(p: Pending) {
         when {
             phase != Phase.LOBBY -> refuse(p.conn, RefuseReason.GAME_STARTED, GAME_STARTED)
             seats.size >= config.maxSeats -> refuse(p.conn, RefuseReason.ROOM_FULL, ROOM_FULL)
@@ -219,9 +236,7 @@ public class Room<S, M, V>(
         }
     }
 
-    public fun declineJoin(id: Int): List<RoomOutput> = step {
-        takeRequest(id)?.let { refuse(it.conn, RefuseReason.DECLINED, "The host did not let you in.") }
-    }
+    private fun decline(p: Pending) = refuse(p.conn, RefuseReason.DECLINED, "The host did not let you in.")
 
     public fun start(seed: Long): List<RoomOutput> = step {
         if (!canStart) return@step
@@ -246,6 +261,7 @@ public class Room<S, M, V>(
 
     private inline fun step(block: () -> Unit): List<RoomOutput> {
         out = mutableListOf()
+        answered = false
         if (phase != Phase.CLOSED) {
             expireDropped()
             fireDue()
@@ -321,7 +337,13 @@ public class Room<S, M, V>(
         }
     }
 
-    private fun takeRequest(id: Int) = pending.find { it.id == id }?.also { pending.remove(it) }
+    /** Whether the last room call answered a join request (found it by id, and by check code when given). */
+    internal var answered: Boolean = false
+        private set
+
+    private fun takeRequest(id: Int, checkCode: String? = null): Pending? =
+        pending.find { it.id == id && (checkCode == null || it.checkCode == checkCode) }
+            ?.also { pending.remove(it); answered = true }
 
     private fun refuseAllRequests(reason: RefuseReason, message: String) {
         pending.forEach { refuse(it.conn, reason, message) }
