@@ -89,7 +89,7 @@ class HostAnswerTest {
             val h = host(Harness.config(requestTimeoutMs = 300))
             val port = h.open(bindHost = LOOPBACK)
             val (c, request) = h.ask(port)
-            kotlinx.coroutines.delay(400) // past the limit; the room times it out in this call or in a tick before it
+            kotlinx.coroutines.delay(1_500) // past the limit and a tick (at most 1 s apart), so it timed out already
             assertFalse(h.acceptRequest(request.id, request.checkCode))
             assertEquals(RefuseReason.REQUEST_TIMED_OUT, c.refusal())
             assertEquals(listOf("Host"), h.lobby.value.seats.map { it.name })

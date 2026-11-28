@@ -147,21 +147,21 @@ public class NearbyHost<S, M, V>(
      * that moved the request to a new connection cannot be seated by this call: the moved request has a new id, and
      * its code is worked out again for the new connection (six digits, so on rare occasions the same code).
      *
-     * Before it looks, the call times out requests whose time is up, this one too: then it returns false and the
-     * joiner is told the request timed out.
+     * Before it looks, the call times out requests whose time is up (not while the room is paused), this one too:
+     * then it returns false and the joiner is told the request timed out.
      *
      * Returns true when this call took that request off [joinRequests]: the joiner gets the seat, or, when the room
      * filled up meanwhile, is refused as full. Returns false when no request has this id and code (it moved, timed out,
      * was declined, the game started, or the room closed); then nothing was done for it.
      */
-    public suspend fun acceptRequest(id: Int, checkCode: String): Boolean = answer { acceptRequest(id, checkCode) }
+    public suspend fun acceptRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = true)
 
     /**
      * Declines join request [id] only while it still shows [checkCode]; see [acceptRequest]. Returns true when this
-     * call took the request off [joinRequests] and sent the refusal (a joiner whose link just dropped may not get it),
-     * false when no request has this id and code.
+     * call took the request off [joinRequests]; the refusal is then sent as well as the link allows (a joiner whose link
+     * just dropped, or whose send queue is full, may not get it). False when no request has this id and code.
      */
-    public suspend fun declineRequest(id: Int, checkCode: String): Boolean = answer { declineRequest(id, checkCode) }
+    public suspend fun declineRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = false)
 
     @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")
     public suspend fun acceptJoin(id: Int): Unit = act { acceptJoin(id) }
@@ -169,10 +169,10 @@ public class NearbyHost<S, M, V>(
     @Deprecated("Does not check the code the host compared. Use declineRequest(id, checkCode).")
     public suspend fun declineJoin(id: Int): Unit = act { declineJoin(id) }
 
-    private suspend fun answer(call: Room<S, M, V>.() -> List<RoomOutput>): Boolean {
-        var answered = false
-        act { call().also { answered = this.answered } }
-        return answered
+    private suspend fun answer(id: Int, checkCode: String, accept: Boolean): Boolean {
+        var took = false
+        act { answerRequest(id, checkCode, accept).also { took = it.second }.first }
+        return took
     }
 
     public suspend fun addBot(): Unit = act { addBot() }

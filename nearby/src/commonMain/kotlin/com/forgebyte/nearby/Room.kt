@@ -94,9 +94,9 @@ public class Room<S, M, V>(
         var heldToken: String? = null
     }
 
-    /** [firstId] stays when a retry moves the request ([id] then changes); only the deprecated id-only answers use it. */
+    /** [ids]: every id this request had (a retry that moves it gets a new one); only the deprecated id-only answers use it. */
     private class Pending(var id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?) {
-        val firstId = id
+        val ids = mutableSetOf(id)
     }
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
@@ -215,14 +215,27 @@ public class Room<S, M, V>(
 
     /**
      * Accepts request [id] only while it still shows [checkCode], the code the host compared. Otherwise (the request is
-     * gone, timed out, or moved to a new connection with a new id) it does nothing.
+     * gone, timed out, or moved to a new connection with a new id) it answers nothing; like every room call, it still
+     * times out old requests first (not while [isPaused]).
      */
-    public fun acceptRequest(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::seat) }
+    public fun acceptRequest(id: Int, checkCode: String): List<RoomOutput> = answerRequest(id, checkCode, accept = true).first
 
     /** Declines request [id] only while it still shows [checkCode]; see [acceptRequest]. */
-    public fun declineRequest(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::decline) }
+    public fun declineRequest(id: Int, checkCode: String): List<RoomOutput> = answerRequest(id, checkCode, accept = false).first
 
-    /** By id alone, as before: also by the id the request had before a retry moved it. */
+    /** The outputs, and whether this call took request [id] showing [checkCode] off the list (known per call). */
+    internal fun answerRequest(id: Int, checkCode: String, accept: Boolean): Pair<List<RoomOutput>, Boolean> {
+        var took = false
+        val outputs = step {
+            takeRequest(id, checkCode)?.let {
+                took = true
+                if (accept) seat(it) else decline(it)
+            }
+        }
+        return outputs to took
+    }
+
+    /** By id alone, as before: also by any id the request had before a retry moved it. */
     @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")
     public fun acceptJoin(id: Int): List<RoomOutput> = step {
         takeRequestById(id)?.let(::seat)
@@ -268,24 +281,14 @@ public class Room<S, M, V>(
         pending.clear()
     }
 
-    private var inStep = false
-
     private inline fun step(block: () -> Unit): List<RoomOutput> {
-        // A callback (checkCodeOf, the game) that calls back into the room would see a half-done step.
-        check(!inStep) { "Room calls must not be nested (called from inside a room call)" }
-        inStep = true
-        try {
-            out = mutableListOf()
-            answered = false
-            if (phase != Phase.CLOSED) {
-                expireDropped()
-                fireDue()
-                block()
-            }
-            return out
-        } finally {
-            inStep = false
+        out = mutableListOf()
+        if (phase != Phase.CLOSED) {
+            expireDropped()
+            fireDue()
+            block()
         }
+        return out
     }
 
     private fun hello(conn: String, h: ClientMsg.Hello) {
@@ -313,11 +316,12 @@ public class Room<S, M, V>(
             val seat = seats.indexOfFirst { t -> t.joinId?.let { sameSecret(it, h.joinId) } == true }
             if (seat >= 0) return reseat(seat, conn)
             pending.firstOrNull { p -> p.joinId?.let { sameSecret(it, h.joinId) } == true }?.let { p ->
-                val code = checkCodeOf(conn) // first: if it throws, the request is unchanged
+                val code = codeOf(conn) ?: return // first: without a code the request stays as it was
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
                 p.checkCode = code
                 p.id = nextRequest++ // an answer for the old connection must not reach this one
+                p.ids += p.id
                 if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
             }
@@ -328,7 +332,7 @@ public class Room<S, M, V>(
             if (pending.size >= config.maxPendingRequests) {
                 return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
             }
-            val code = checkCodeOf(conn)
+            val code = codeOf(conn) ?: return
             pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), code, h.joinId)
             if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
             return
@@ -336,6 +340,10 @@ public class Room<S, M, V>(
         seats += Seat(cleanName(h.name, seats.size), SeatKind.PLAYER, conn).apply { joinId = h.joinId }
         welcome(seats.lastIndex)
     }
+
+    /** [checkCodeOf] for [conn]; when it fails, the connection is closed (no request can show it) and this is null. */
+    private fun codeOf(conn: String): String? =
+        runCatching { checkCodeOf(conn) }.getOrElse { out += RoomOutput.Close(conn); null }
 
     /** The seat's player is back on [conn] (with their token, or their join id before any Welcome). */
     private fun reseat(seat: Int, conn: String) {
@@ -358,16 +366,12 @@ public class Room<S, M, V>(
         }
     }
 
-    /** Whether the last room call answered a join request (found it by id, and by check code when given). */
-    internal var answered: Boolean = false
-        private set
-
     private fun takeRequest(id: Int, checkCode: String): Pending? =
         take(pending.find { it.id == id && it.checkCode == checkCode })
 
-    private fun takeRequestById(id: Int): Pending? = take(pending.find { it.id == id } ?: pending.find { it.firstId == id })
+    private fun takeRequestById(id: Int): Pending? = take(pending.find { it.id == id } ?: pending.find { id in it.ids })
 
-    private fun take(p: Pending?): Pending? = p?.also { pending.remove(it); answered = true }
+    private fun take(p: Pending?): Pending? = p?.also { pending.remove(it) }
 
     private fun refuseAllRequests(reason: RefuseReason, message: String) {
         pending.forEach { refuse(it.conn, reason, message) }

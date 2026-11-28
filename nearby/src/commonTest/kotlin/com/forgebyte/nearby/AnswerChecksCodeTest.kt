@@ -2,7 +2,6 @@ package com.forgebyte.nearby
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -31,8 +30,7 @@ class AnswerChecksCodeTest {
     @Test
     fun givenRetryMovedTheRequest_whenHostAcceptsWhatItSawBefore_thenNobodyIsSeatedAndTheNewRequestStays() {
         retriedRequest()
-        assertEquals(emptyList(), room.acceptRequest(1, "code-a"), "nothing is sent to the new connection")
-        assertFalse(room.answered)
+        assertEquals(emptyList<RoomOutput>() to false, room.answerRequest(1, "code-a", accept = true), "nothing sent, not taken")
         assertEquals(1, room.seatCount)
         assertEquals(listOf(JoinRequest(2, "Asha", "code-a2")), room.joinRequests, "the host sees the new request")
         assertEquals(emptyList(), room.acceptRequest(1, "code-a2"), "the old id with the new code does nothing either")
@@ -101,9 +99,9 @@ class AnswerChecksCodeTest {
     fun givenRequestTimedOut_whenHostAnswersItWithoutATickFirst_thenItIsRefusedAsTimedOutAndNotAnswered() {
         h.request("a", name = "Asha")
         h.now = Harness.REQUEST_TIMEOUT
-        val out = room.acceptRequest(1, "code-a")
+        val (out, took) = room.answerRequest(1, "code-a", accept = true)
         assertEquals(RefuseReason.REQUEST_TIMED_OUT, refusal(out, "a"), "the expiry in the same call refuses it")
-        assertFalse(room.answered)
+        assertFalse(took)
         assertEquals(1, room.seatCount)
     }
 
@@ -112,8 +110,9 @@ class AnswerChecksCodeTest {
         val small = Harness(FakeGame(), Harness.config(maxSeats = 2))
         small.request("a", name = "Asha")
         small.hello("b", name = "Bo") // the full code takes the last seat at once
-        assertEquals(RefuseReason.ROOM_FULL, refusal(small.room.acceptRequest(1, "code-a"), "a"))
-        assertTrue(small.room.answered, "the call took the request off the list")
+        val (out, took) = small.room.answerRequest(1, "code-a", accept = true)
+        assertEquals(RefuseReason.ROOM_FULL, refusal(out, "a"))
+        assertTrue(took, "the call took the request off the list")
     }
 
     @Test
@@ -122,25 +121,20 @@ class AnswerChecksCodeTest {
         room.addBot()
         room.start(seed = 1)
         assertEquals(Phase.PLAYING, room.phase)
-        assertEquals(emptyList(), room.acceptRequest(1, "code-a"))
-        assertFalse(room.answered, "starting refused the request already")
+        assertEquals(emptyList<RoomOutput>() to false, room.answerRequest(1, "code-a", accept = true), "starting refused it already")
 
         val closed = Harness(FakeGame())
         closed.request("a", name = "Asha")
         closed.room.hostLeave()
-        assertEquals(emptyList(), closed.room.acceptRequest(1, "code-a"))
-        assertFalse(closed.room.answered)
+        assertEquals(emptyList<RoomOutput>() to false, closed.room.answerRequest(1, "code-a", accept = true))
     }
 
     @Test
-    fun givenRequest_whenAnswered_thenAnsweredIsTrueOnlyForTheCallThatTookIt() {
+    fun givenRequest_whenAnswered_thenTookIsTrueOnlyForTheCallThatTookIt() {
         h.request("a", name = "Asha")
-        room.acceptRequest(1, "code-b")
-        assertFalse(room.answered, "a wrong code answers nothing")
-        room.acceptRequest(1, "code-a")
-        assertTrue(room.answered)
-        room.tick()
-        assertFalse(room.answered, "the next room call starts again from false")
+        assertFalse(room.answerRequest(1, "code-b", accept = true).second, "a wrong code takes nothing")
+        assertTrue(room.answerRequest(1, "code-a", accept = false).second)
+        assertFalse(room.answerRequest(1, "code-a", accept = false).second, "it is gone now")
     }
 
     @Suppress("DEPRECATION")
@@ -164,22 +158,45 @@ class AnswerChecksCodeTest {
         assertEquals(RefuseReason.DECLINED, refusal(room.declineJoin(1), "a2"))
     }
 
+    @Suppress("DEPRECATION")
     @Test
-    fun givenCheckCodeFailsForTheRetry_whenTheRetryArrives_thenTheRequestIsUnchanged() {
-        val failing = Harness(FakeGame(), checkCodeOf = { if (it == "a2") error("no code") else "code-$it" })
-        failing.request("a", name = "Asha", joinId = "J1")
-        runCatching { failing.request("a2", name = "Asha", joinId = "J1") }
-        assertEquals(listOf(JoinRequest(1, "Asha", "code-a")), failing.room.joinRequests)
-        assertEquals(1, failing.room.acceptRequest(1, "code-a").welcome("a").lobby.yourSeat, "still the first connection")
+    fun givenRequestMovedTwice_whenTheDeprecatedAcceptUsesTheMiddleId_thenItStillSeats() {
+        retriedRequest()
+        h.request("a3", name = "Asha", joinId = "J1")
+        assertEquals(listOf(3), room.joinRequests.map { it.id })
+        assertEquals(1, room.acceptJoin(2).welcome("a3").lobby.yourSeat, "every id the request had still answers")
     }
 
     @Test
-    fun givenCheckCodeCallsBackIntoTheRoom_whenARequestArrives_thenTheNestedCallIsRefused() {
+    fun givenCheckCodeFailsForTheRetry_whenTheRetryArrives_thenTheRetryIsClosedAndTheRequestAndEarlierOutputsStay() {
+        val failing = Harness(FakeGame(), checkCodeOf = { if (it == "a2") error("no code") else "code-$it" })
+        failing.request("b", name = "Bo")
+        failing.now = Harness.REQUEST_TIMEOUT / 2
+        failing.request("a", name = "Asha", joinId = "J1")
+        failing.now = Harness.REQUEST_TIMEOUT // Bo's request runs out in the same call
+        val out = failing.request("a2", name = "Asha", joinId = "J1")
+        assertEquals(RefuseReason.REQUEST_TIMED_OUT, refusal(out, "b"), "the earlier timeout is not lost")
+        assertTrue(out.closed("a2"), "a connection with no code cannot be shown, so it is closed")
+        assertEquals(listOf(JoinRequest(2, "Asha", "code-a")), failing.room.joinRequests)
+        assertEquals(1, failing.room.acceptRequest(2, "code-a").welcome("a").lobby.yourSeat, "still the first connection")
+    }
+
+    @Test
+    fun givenCheckCodeFailsForANewRequest_whenItArrives_thenItIsClosedAndNotListed() {
+        val failing = Harness(FakeGame(), checkCodeOf = { error("no code") })
+        assertTrue(failing.request("a", name = "Asha").closed("a"))
+        assertEquals(emptyList(), failing.room.joinRequests)
+    }
+
+    @Test
+    fun givenNewGameCallsBackIntoTheRoom_whenTheHostStarts_thenTheGameStillStarts() {
         lateinit var nested: Harness<FakeState, FakeMove, FakeView>
-        nested = Harness(FakeGame(), checkCodeOf = { nested.room.tick(); "code-$it" })
-        assertFailsWith<IllegalStateException> { nested.request("a", name = "Asha") }
-        assertEquals(emptyList(), nested.room.joinRequests)
-        assertEquals(emptyList(), nested.room.tick(), "the room still works after the refused call")
+        nested = Harness(object : FakeGame() {
+            override fun newGame(seats: Int, seed: Long): FakeState = nested.room.tick().let { super.newGame(seats, seed) }
+        })
+        nested.room.addBot()
+        nested.room.start(seed = 1)
+        assertEquals(Phase.PLAYING, nested.room.phase, "a nested room call is allowed, as before")
     }
 
     @Suppress("DEPRECATION")
