@@ -20,14 +20,16 @@ ceo picks the order of the open items.
 | v0.3.8 | 2026-11-10 | Hosts can approve code joins, a fake second player for debug builds (`nearby-testing`) |
 | v0.3.9 | 2026-11-14 | A joiner keeps its seat when a reconnect's Welcome is lost |
 | v0.3.10 | 2026-11-27 | A silent link is noticed, pause and resume stop the clocks, host IPv4 in discovery, opt-in `nearby-hotspot` |
+| v0.4.0 | 2026-11-28 | Accept and Decline check the join code under the room lock (`acceptRequest` / `declineRequest(id, checkCode)`); `acceptJoin(id)` / `declineJoin(id)` deprecated |
 
 Docs: `docs/ADAPTERS.md` (how a game uses the library), `docs/FAKE-PEER.md`, `docs/DATA-SAFETY.md`.
 
 ## Open
 
-0. **Device checks for v0.3.10 in a game test build** (PRs #62, #63 and #38, merged in #66): Home, screen off and
-   link drops on host and joiner both ways, and two Android 9 to 13 hosts named `Android.local`. They run in the
-   games' integration builds on v0.3.10. Each case needs 10 PASS in a row (30 after any failure) and two clean rounds,
+0. **Device checks for v0.3.10 and v0.4.0 in a game test build** (PRs #62, #63 and #38, merged in #66; #69): Home,
+   screen off and link drops on host and joiner both ways, two Android 9 to 13 hosts named `Android.local`, and a
+   join approved with `acceptRequest` while the joiner's link drops and comes back. They run in the games'
+   integration builds on v0.4.0. Each case needs 10 PASS in a row (30 after any failure) and two clean rounds,
    each judged by a new fresh reviewer. Round 6 (2026-11-18, before the merge) gave 10 PASS, one per case.
 1. **Device round: two phones and the Mac in one room.** One phone hosts a 3-seat room, the other phone and the Mac
    join, the host swaps each run, the phone joins by discovery and then by short code. No code change. Waits for a
