@@ -42,14 +42,17 @@ public class FakePeer<M, V>(
 
     /**
      * Asks to join [host], which listens on [port] (from [NearbyHost.open]). With [autoAccept] the peer accepts its
-     * own request (matched by check code); without it the request waits in [NearbyHost.joinRequests] for the
+     * own request (matched by check code, six digits, so meant for a room where no other joiner waits); without it the request waits in [NearbyHost.joinRequests] for the
      * game's approve button. The job ends when the join ends; cancel it or call [leave] to stop the peer.
      */
     public fun join(host: NearbyHost<*, M, V>, port: Int, autoAccept: Boolean = true): Job = scope.launch {
         client.requestJoin(RoomAd("fake-peer", name, gameId, PROTOCOL_VERSION, gameVersion, 1, LOOPBACK, port), name)
-        // Accepts the request that shows this peer's current code; a retry moves it (new id, new code), so try again.
+        // Accepts the request that shows this peer's current code; a retry moves it (new id, new code), so
+        // try again. Codes are six digits: in a room where other joiners also wait, use autoAccept = false.
         if (autoAccept) launch {
-            combine(client.checkCode.filterNotNull(), host.joinRequests) { code, requests -> requests.find { it.checkCode == code } }
+            combine(client.checkCode.filterNotNull(), host.joinRequests) { code, requests ->
+                requests.find { it.checkCode == code }
+            }
                 .filterNotNull()
                 .first { host.acceptRequest(it.id, it.checkCode) }
         }

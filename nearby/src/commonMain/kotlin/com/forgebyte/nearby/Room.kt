@@ -94,7 +94,10 @@ public class Room<S, M, V>(
         var heldToken: String? = null
     }
 
-    private class Pending(var id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?)
+    /** [firstId] stays when a retry moves the request ([id] then changes); only the deprecated id-only answers use it. */
+    private class Pending(var id: Int, var conn: String, val name: String, var at: Long, var checkCode: String, val joinId: String?) {
+        val firstId = id
+    }
 
     private val seats = mutableListOf(Seat(cleanName(config.hostName, 0), SeatKind.HOST, HOST_CONN))
     private val pending = mutableListOf<Pending>()
@@ -219,11 +222,17 @@ public class Room<S, M, V>(
     /** Declines request [id] only while it still shows [checkCode]; see [acceptRequest]. */
     public fun declineRequest(id: Int, checkCode: String): List<RoomOutput> = step { takeRequest(id, checkCode)?.let(::decline) }
 
+    /** By id alone, as before: also by the id the request had before a retry moved it. */
     @Deprecated("Does not check the code the host compared. Use acceptRequest(id, checkCode).")
-    public fun acceptJoin(id: Int): List<RoomOutput> = step { takeRequest(id)?.let(::seat) }
+    public fun acceptJoin(id: Int): List<RoomOutput> = step {
+        takeRequestById(id)?.let(::seat)
+    }
 
+    /** By id alone, as before; see [acceptJoin]. */
     @Deprecated("Does not check the code the host compared. Use declineRequest(id, checkCode).")
-    public fun declineJoin(id: Int): List<RoomOutput> = step { takeRequest(id)?.let(::decline) }
+    public fun declineJoin(id: Int): List<RoomOutput> = step {
+        takeRequestById(id)?.let(::decline)
+    }
 
     private fun seat(p: Pending) {
         when {
@@ -259,15 +268,24 @@ public class Room<S, M, V>(
         pending.clear()
     }
 
+    private var inStep = false
+
     private inline fun step(block: () -> Unit): List<RoomOutput> {
-        out = mutableListOf()
-        answered = false
-        if (phase != Phase.CLOSED) {
-            expireDropped()
-            fireDue()
-            block()
+        // A callback (checkCodeOf, the game) that calls back into the room would see a half-done step.
+        check(!inStep) { "Room calls must not be nested (called from inside a room call)" }
+        inStep = true
+        try {
+            out = mutableListOf()
+            answered = false
+            if (phase != Phase.CLOSED) {
+                expireDropped()
+                fireDue()
+                block()
+            }
+            return out
+        } finally {
+            inStep = false
         }
-        return out
     }
 
     private fun hello(conn: String, h: ClientMsg.Hello) {
@@ -295,9 +313,10 @@ public class Room<S, M, V>(
             val seat = seats.indexOfFirst { t -> t.joinId?.let { sameSecret(it, h.joinId) } == true }
             if (seat >= 0) return reseat(seat, conn)
             pending.firstOrNull { p -> p.joinId?.let { sameSecret(it, h.joinId) } == true }?.let { p ->
+                val code = checkCodeOf(conn) // first: if it throws, the request is unchanged
                 if (p.conn != conn) out += RoomOutput.Close(p.conn)
                 p.conn = conn
-                p.checkCode = checkCodeOf(conn)
+                p.checkCode = code
                 p.id = nextRequest++ // an answer for the old connection must not reach this one
                 if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting)
                 return
@@ -309,7 +328,8 @@ public class Room<S, M, V>(
             if (pending.size >= config.maxPendingRequests) {
                 return refuse(conn, RefuseReason.TOO_MANY_REQUESTS, "The host has too many requests. Try again soon.")
             }
-            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), checkCodeOf(conn), h.joinId)
+            val code = checkCodeOf(conn)
+            pending += Pending(nextRequest++, conn, cleanName(h.name, seats.size), clock(), code, h.joinId)
             if (h.roomSecret != null) out += RoomOutput.Send(conn, HostMsg.Waiting) // a code joiner expects a seat
             return
         }
@@ -342,9 +362,12 @@ public class Room<S, M, V>(
     internal var answered: Boolean = false
         private set
 
-    private fun takeRequest(id: Int, checkCode: String? = null): Pending? =
-        pending.find { it.id == id && (checkCode == null || it.checkCode == checkCode) }
-            ?.also { pending.remove(it); answered = true }
+    private fun takeRequest(id: Int, checkCode: String): Pending? =
+        take(pending.find { it.id == id && it.checkCode == checkCode })
+
+    private fun takeRequestById(id: Int): Pending? = take(pending.find { it.id == id } ?: pending.find { it.firstId == id })
+
+    private fun take(p: Pending?): Pending? = p?.also { pending.remove(it); answered = true }
 
     private fun refuseAllRequests(reason: RefuseReason, message: String) {
         pending.forEach { refuse(it.conn, reason, message) }

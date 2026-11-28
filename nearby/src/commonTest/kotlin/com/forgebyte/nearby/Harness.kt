@@ -46,7 +46,7 @@ class Harness<S, M, V>(
 
         /** Pacing and the turn timer are off unless a test asks, so older tests keep their meaning. */
         fun config(maxSeats: Int = 4, minSeats: Int = 2, maxPending: Int = 4, botDelayMs: Long = 0, turnTimeoutMs: Long = 0,
-                   approveCodeJoins: Boolean = false) = RoomConfig(
+                   approveCodeJoins: Boolean = false, requestTimeoutMs: Long = REQUEST_TIMEOUT) = RoomConfig(
             roomName = "Den",
             hostName = "Host",
             gameVersion = GAME_VERSION,
@@ -54,7 +54,7 @@ class Harness<S, M, V>(
             maxSeats = maxSeats,
             minSeats = minSeats,
             reconnectWindowMs = WINDOW,
-            requestTimeoutMs = REQUEST_TIMEOUT,
+            requestTimeoutMs = requestTimeoutMs,
             maxPendingRequests = maxPending,
             botDelayMs = botDelayMs,
             turnTimeoutMs = turnTimeoutMs,

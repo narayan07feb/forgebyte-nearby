@@ -2,6 +2,7 @@ package com.forgebyte.nearby
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -48,11 +49,12 @@ class AnswerChecksCodeTest {
     }
 
     @Test
-    fun givenEveryConnectionShowsTheSameCode_whenARetryMovesTheRequest_thenTheOldAnswerStillDoesNothing() {
+    fun givenEveryConnectionShowsTheSameCode_whenARetryMovesTheRequest_thenTheOldAcceptOrDeclineStillDoesNothing() {
         val same = Harness(FakeGame(), checkCodeOf = { "" }) // a Room used without a secure channel
         same.request("a", name = "Asha", joinId = "J1")
         same.request("a2", name = "Asha", joinId = "J1")
         assertEquals(emptyList(), same.room.acceptRequest(1, ""), "the id tells the two connections apart")
+        assertEquals(emptyList(), same.room.declineRequest(1, ""))
         assertEquals(1, same.room.seatCount)
         assertEquals(1, same.room.acceptRequest(2, "").welcome("a2").lobby.yourSeat)
     }
@@ -75,12 +77,14 @@ class AnswerChecksCodeTest {
     }
 
     @Test
-    fun givenApprovingRoom_whenACodeJoinRetriesBeforeTheAnswer_thenTheOldAnswerDoesNothing() {
+    fun givenApprovingRoom_whenACodeJoinRetriesBeforeTheAnswer_thenTheOldAcceptOrDeclineDoesNothing() {
         val approving = Harness(FakeGame(), Harness.config(approveCodeJoins = true))
         approving.hello("a", name = "Asha", joinId = "J1")
         approving.hello("a2", name = "Asha", joinId = "J1")
         assertEquals(listOf(JoinRequest(2, "Asha", "code-a2")), approving.room.joinRequests)
         assertEquals(emptyList(), approving.room.acceptRequest(1, "code-a"))
+        assertEquals(emptyList(), approving.room.declineRequest(1, "code-a"))
+        assertEquals(listOf(2), approving.room.joinRequests.map { it.id })
         assertEquals(1, approving.room.seatCount)
     }
 
@@ -148,10 +152,34 @@ class AnswerChecksCodeTest {
 
     @Suppress("DEPRECATION")
     @Test
-    fun givenRetryMovedTheRequest_whenTheDeprecatedAcceptUsesTheOldId_thenNobodyIsSeated() {
+    fun givenRetryMovedTheRequest_whenTheDeprecatedAcceptUsesTheOldId_thenItStillSeatsAsBefore() {
         retriedRequest()
-        assertEquals(emptyList(), room.acceptJoin(1))
-        assertEquals(1, room.seatCount)
+        assertEquals(1, room.acceptJoin(1).welcome("a2").lobby.yourSeat, "an id cached before the move still answers")
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun givenRetryMovedTheRequest_whenTheDeprecatedDeclineUsesTheOldId_thenItStillDeclinesAsBefore() {
+        retriedRequest()
+        assertEquals(RefuseReason.DECLINED, refusal(room.declineJoin(1), "a2"))
+    }
+
+    @Test
+    fun givenCheckCodeFailsForTheRetry_whenTheRetryArrives_thenTheRequestIsUnchanged() {
+        val failing = Harness(FakeGame(), checkCodeOf = { if (it == "a2") error("no code") else "code-$it" })
+        failing.request("a", name = "Asha", joinId = "J1")
+        runCatching { failing.request("a2", name = "Asha", joinId = "J1") }
+        assertEquals(listOf(JoinRequest(1, "Asha", "code-a")), failing.room.joinRequests)
+        assertEquals(1, failing.room.acceptRequest(1, "code-a").welcome("a").lobby.yourSeat, "still the first connection")
+    }
+
+    @Test
+    fun givenCheckCodeCallsBackIntoTheRoom_whenARequestArrives_thenTheNestedCallIsRefused() {
+        lateinit var nested: Harness<FakeState, FakeMove, FakeView>
+        nested = Harness(FakeGame(), checkCodeOf = { nested.room.tick(); "code-$it" })
+        assertFailsWith<IllegalStateException> { nested.request("a", name = "Asha") }
+        assertEquals(emptyList(), nested.room.joinRequests)
+        assertEquals(emptyList(), nested.room.tick(), "the room still works after the refused call")
     }
 
     @Suppress("DEPRECATION")
