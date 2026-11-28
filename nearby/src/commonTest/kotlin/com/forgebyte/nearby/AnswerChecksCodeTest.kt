@@ -82,6 +82,7 @@ class AnswerChecksCodeTest {
         for (conn in listOf("a", "a2", "a3")) abcb.request(conn, name = "Asha", joinId = "J1")
         assertEquals(listOf(JoinRequest(1, "Asha", "333333")), abcb.room.joinRequests, "every new code moves it")
         assertTrue(abcb.request("a4", name = "Asha", joinId = "J1").closed("a4"), "a middle code again: dropped")
+        assertEquals(emptyList(), abcb.room.joinRequests, "the request is gone, not left with code C")
         assertEquals(emptyList<RoomOutput>() to false, abcb.room.answerRequest(1, "222222", accept = true))
         assertEquals(1, abcb.room.seatCount)
     }

@@ -58,6 +58,7 @@ public class NearbyHost<S, M, V>(
     private var stopServer: (suspend () -> Unit)? = null
     private val wake = Channel<Unit>(Channel.CONFLATED) // tells the ticker to read the room's next wake time again
     internal var randomBytes: (Int) -> ByteArray = ::secureRandomBytes // replaced only by tests
+    internal var beforeAnswerLock: suspend () -> Unit = {} // tests park an answer here, before the room lock
 
     private val _lobby = MutableStateFlow(room.hostLobby)
     public val lobby: StateFlow<Lobby> = _lobby.asStateFlow()
@@ -146,10 +147,11 @@ public class NearbyHost<S, M, V>(
      * screen. Pass both from the same [JoinRequest]. The check and the answer happen in one step under the room lock,
      * so a retry that moved the request to a new connection (a new code, same id) cannot be seated by this call.
      *
-     * Returns true when this call took that request off [joinRequests]: the joiner is seated, or refused if the room
-     * filled up (or the game started) meanwhile. Returns false when no request with exactly this id and this code was
-     * waiting: a retry moved it, it timed out, it was answered already, or the room is closed. A call that finds the
-     * request timed out still tells that joiner so. Messages to the joiner are sent as far as its link allows.
+     * Returns true when this call took a live request with exactly this id and code: the joiner is seated, or refused
+     * as full if the room filled up meanwhile. Returns false when no such request was waiting (a retry moved it, it was
+     * answered already, the game started, or the room is closed). Before it looks, the call times out old requests
+     * (not while paused); if that times out this one, the joiner is told so and the call returns false. Messages to the
+     * joiner are sent as far as its link allows.
      */
     public suspend fun acceptRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = true)
 
@@ -168,6 +170,7 @@ public class NearbyHost<S, M, V>(
 
     private suspend fun answer(id: Int, checkCode: String, accept: Boolean): Boolean {
         var took = false
+        beforeAnswerLock()
         act { answerRequest(id, checkCode, accept).also { took = it.second }.first }
         return took
     }

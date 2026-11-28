@@ -3,6 +3,7 @@ package com.forgebyte.nearby
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -212,7 +213,7 @@ class CutBeforeWelcomeTest {
         relay.cutFirst() // the host is still deciding
         // The host notices the drop before the retry gets through: the relay holds the retry until the list is empty.
         withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.isEmpty() } } ?: error("the drop was not noticed")
-        assertTrue(relay.retryHeld.await(15, java.util.concurrent.TimeUnit.SECONDS), "the joiner retried")
+        assertTrue(relay.retryHeld.await(10, java.util.concurrent.TimeUnit.SECONDS), "the joiner retried") // under the host's 15 s link timeout
         assertFalse(host.acceptRequest(first.id, first.checkCode))
         assertFalse(host.declineRequest(first.id, first.checkCode))
         relay.releaseRetry.countDown()
@@ -243,15 +244,18 @@ class CutBeforeWelcomeTest {
         val bo = withTimeoutOrNull(10.seconds) { host.joinRequests.first { it.size == 2 } }?.get(1) ?: error("no second request")
         relay.cutFirstJoinerSide()
         // The retry moves Asha's request in place: same id, the new connection's code. If the six digits came out
-        // equal (rare), the room drops the request instead and Asha comes back as a new request: this order cannot
-        // be checked then, so the test is skipped. That the code is compared inside the room step is shown by the
-        // Room tests and the mutants, not by this order.
+        // equal (rare), the room drops the request, closes that retry, and Asha comes back on a third connection as a
+        // new request: only then is a new id allowed, and the test is skipped. The window inside an answer is tested
+        // by givenAnswerParkedBeforeTheLock_... .
         val next = withTimeoutOrNull(15.seconds) {
             host.joinRequests.first { r ->
                 r.size == 2 && (r[0].id == seen.id && r[0].checkCode != seen.checkCode || r.none { it.id == seen.id })
             }
         } ?: error("no retry: ${host.joinRequests.value}")
-        org.junit.Assume.assumeTrue("the retry showed the same code: dropped, not moved", next[0].id == seen.id)
+        if (next[0].id != seen.id) {
+            assertTrue(relay.connections.get() >= 3, "a new id only after a dropped same-code retry: ${relay.connections.get()} connections")
+            org.junit.Assume.assumeTrue("the retry showed the same code: dropped, not moved", false)
+        }
         val moved = next.first()
         assertEquals(listOf("Asha", "Bo"), host.joinRequests.value.map { it.name }, "the retry moved Asha's request in place")
         withTimeoutOrNull(10.seconds) { c.checkCode.first { it == moved.checkCode } } ?: error("the joiner never showed the new code")
@@ -273,6 +277,47 @@ class CutBeforeWelcomeTest {
             assertEquals(listOf("Host", "Asha"), host.lobby.value.seats.map { it.name })
         }
         assertEquals(listOf(bo), host.joinRequests.value)
+    }
+
+    /**
+     * The original race window: the host's answer has started (it holds the code it compared) but has not reached the
+     * room lock when the retry moves the request. The answer is parked at the test hook until the move is done. The
+     * code must be compared inside the locked step, so the answer takes nothing; a check made before the lock would
+     * seat the new connection.
+     */
+    @Test
+    fun givenAnswerParkedBeforeTheLock_whenTheRetryMovesTheRequestMeanwhile_thenTheAnswerTakesNothing() = runBlocking<Unit> {
+        for (accept in listOf(true, false)) {
+            val h = NearbyHost(FakeGame(), Harness.config(), scope)
+            try {
+                val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+                val parked = kotlinx.coroutines.CompletableDeferred<Unit>()
+                h.beforeAnswerLock = { parked.complete(Unit); gate.await() }
+                val relay = CutRelay(h.open(bindHost = LOOPBACK), halfOpen = true).also { relays += it }
+                val c = joiner()
+                c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, relay.port), "Asha")
+                val seen = withTimeoutOrNull(10.seconds) { h.joinRequests.first { it.isNotEmpty() } }?.single() ?: error("no request")
+                val answer = scope.async { if (accept) h.acceptRequest(seen.id, seen.checkCode) else h.declineRequest(seen.id, seen.checkCode) }
+                withTimeoutOrNull(10.seconds) { parked.await() } ?: error("the answer never reached the hook")
+                relay.cutFirstJoinerSide()
+                val next = withTimeoutOrNull(15.seconds) {
+                    h.joinRequests.first { r -> r.size == 1 && (r[0].id == seen.id && r[0].checkCode != seen.checkCode || r[0].id != seen.id) }
+                }?.single() ?: error("no retry: ${h.joinRequests.value}")
+                if (next.id != seen.id) {
+                    assertTrue(relay.connections.get() >= 3, "a new id only after a dropped same-code retry")
+                    org.junit.Assume.assumeTrue("the retry showed the same code: dropped, not moved", false)
+                }
+                h.beforeAnswerLock = {}
+                gate.complete(Unit)
+                assertFalse(answer.await(), "accept=$accept: the answer for the old code took nothing")
+                assertEquals(listOf("Host"), h.lobby.value.seats.map { it.name })
+                assertEquals(listOf(next), h.joinRequests.value, "accept=$accept: the moved request still waits")
+                assertTrue(h.acceptRequest(next.id, next.checkCode))
+                assertEquals(ClientStatus.Connected, withTimeoutOrNull(10.seconds) { c.status.first { it == ClientStatus.Connected } })
+            } finally {
+                withTimeoutOrNull(10.seconds) { h.leave() }
+            }
+        }
     }
 
     @Test
@@ -318,7 +363,8 @@ class CutBeforeWelcomeTest {
                 c.requestJoin(RoomAd("k", "Den", "fake", PROTOCOL_VERSION, Harness.GAME_VERSION, 3, LOOPBACK, relay.port), "Asha")
                 val seen = withTimeoutOrNull(10.seconds) { h.joinRequests.first { it.isNotEmpty() } }?.single() ?: error("no request")
                 relay.cutFirstJoinerSide()
-                assertTrue(relay.retryHeld.await(15, java.util.concurrent.TimeUnit.SECONDS), "round $round: the joiner retried")
+                // Under the host's 15 s link timeout for the kept socket, which the relay no longer answers.
+                assertTrue(relay.retryHeld.await(10, java.util.concurrent.TimeUnit.SECONDS), "round $round: the joiner retried")
                 assertTrue(h.acceptRequest(seen.id, seen.checkCode), "round $round: the request was still the one the host saw")
                 assertEquals(listOf("Host", "Asha"), h.lobby.value.seats.map { it.name }, "round $round")
                 relay.releaseRetry.countDown()
@@ -372,7 +418,7 @@ class CutBeforeWelcomeTest {
     }
 
     @Test
-    fun givenReconnectNotWelcomedYet_whenThePlayerSetsReady_thenNothingIsSentUntilTheWelcome() = runBlocking<Unit> {
+    fun givenReconnectNotWelcomedYet_whenThePlayerSetsReady_thenReadyReturnsFalseUntilTheWelcome() = runBlocking<Unit> {
         val relay = CutRelay(host.open(bindHost = LOOPBACK), cutOn = 1, hold = true).also { relays += it }
         val c = joiner()
         c.joinAndWait(relay)
