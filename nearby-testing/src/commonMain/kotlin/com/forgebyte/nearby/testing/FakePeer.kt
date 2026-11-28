@@ -48,13 +48,15 @@ public class FakePeer<M, V>(
     public fun join(host: NearbyHost<*, M, V>, port: Int, autoAccept: Boolean = true): Job = scope.launch {
         client.requestJoin(RoomAd("fake-peer", name, gameId, PROTOCOL_VERSION, gameVersion, 1, LOOPBACK, port), name)
         // Accepts the request that shows this peer's current code; a retry moves it to a new code, so try again.
-        if (autoAccept) launch {
-            launch { client.status.first { it == ClientStatus.Connected }; this@launch.cancel() } // joined: stop approving
-            combine(client.checkCode.filterNotNull(), host.joinRequests) { code, requests ->
-                requests.find { it.checkCode == code }
+        if (autoAccept) {
+            val approving = launch {
+                combine(client.checkCode.filterNotNull(), host.joinRequests) { code, requests ->
+                    requests.find { it.checkCode == code }
+                }
+                    .filterNotNull()
+                    .first { host.acceptRequest(it.id, it.checkCode) }
             }
-                .filterNotNull()
-                .first { host.acceptRequest(it.id, it.checkCode) }
+            launch { client.status.first { it == ClientStatus.Connected }; approving.cancel() } // joined: stop approving
         }
         launch {
             client.status.first { it == ClientStatus.Connected }

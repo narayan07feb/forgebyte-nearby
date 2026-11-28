@@ -86,7 +86,7 @@ class HostAnswerTest {
     @Test
     fun givenRequestTimedOutByTheRoomClock_whenHostAcceptsLater_thenFalse() = runBlocking<Unit> {
         withTimeout(30.seconds) {
-            val h = host(Harness.config(requestTimeoutMs = 1_000))
+            val h = host(Harness.config(requestTimeoutMs = 3_000)) // room for the request to show before it runs out
             val port = h.open(bindHost = LOOPBACK)
             val (c, request) = h.ask(port)
             assertEquals(RefuseReason.REQUEST_TIMED_OUT, c.refusal(), "the room's clock timed it out first")

@@ -103,21 +103,26 @@ class CutBeforeWelcomeTest {
             thread(isDaemon = true) {
                 while (true) {
                     val joiner = runCatching { server.accept() }.getOrNull() ?: break
-                    val toHost = Socket(InetAddress.getLoopbackAddress(), target)
                     val first = connections.getAndIncrement() == cutOn
-                    allSockets += listOf(joiner, toHost)
-                    if (first) synchronized(firstSockets) {
+                    allSockets += joiner
+                    if (!first) {
+                        // A held retry reaches the host only on release, so the host's key-exchange limit starts then.
+                        thread(isDaemon = true) {
+                            if (holdRetry) { retryHeld.countDown(); releaseRetry.await() }
+                            val toHost = Socket(InetAddress.getLoopbackAddress(), target).also { allSockets += it }
+                            pump(joiner.getInputStream(), toHost, joiner)
+                            pump(toHost.getInputStream(), joiner, toHost)
+                        }
+                        continue
+                    }
+                    val toHost = Socket(InetAddress.getLoopbackAddress(), target)
+                    allSockets += toHost
+                    synchronized(firstSockets) {
                         firstSockets += listOf(joiner, toHost)
                         if (halfOpen) keptOpen += toHost // before any pump can close it
                     }
-                    if (first) {
-                        pump(joiner.getInputStream(), toHost, joiner) // joiner -> host, untouched
-                        cutAtFirstBinary(toHost.getInputStream(), joiner, toHost)
-                    } else thread(isDaemon = true) {
-                        if (holdRetry) { retryHeld.countDown(); releaseRetry.await() }
-                        pump(joiner.getInputStream(), toHost, joiner)
-                        pump(toHost.getInputStream(), joiner, toHost)
-                    }
+                    pump(joiner.getInputStream(), toHost, joiner) // joiner -> host, untouched
+                    cutAtFirstBinary(toHost.getInputStream(), joiner, toHost)
                 }
             }
         }

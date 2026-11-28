@@ -146,18 +146,17 @@ public class NearbyHost<S, M, V>(
      * screen. Pass both from the same [JoinRequest]. The check and the answer happen in one step under the room lock,
      * so a retry that moved the request to a new connection (a new code, same id) cannot be seated by this call.
      *
-     * Returns true when this call took that request off [joinRequests]: the joiner gets the seat, or, when the room
-     * filled up meanwhile, is refused as full. Returns false when, after the call has timed out old requests (not while
-     * the room is paused), this call did not take a request with exactly this id and this code (the same call may
-     * still time out old requests, this one too). Messages to the joiner are sent as far as its link allows.
+     * Returns true when this call took that request off [joinRequests]: the joiner is seated, or refused if the room
+     * filled up (or the game started) meanwhile. Returns false when no request with exactly this id and this code was
+     * waiting: a retry moved it, it timed out, it was answered already, or the room is closed. A call that finds the
+     * request timed out still tells that joiner so. Messages to the joiner are sent as far as its link allows.
      */
     public suspend fun acceptRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = true)
 
     /**
      * Declines join request [id] only while it still shows [checkCode], in the same locked step as [acceptRequest].
      * Returns true when this call took that request off [joinRequests]; the joiner is then told the host did not let
-     * them in, as far as its link allows. Returns false when this call did not take a matching request (the same call
-     * may still time out old requests, this one too).
+     * them in, as far as its link allows. Returns false as [acceptRequest] does.
      */
     public suspend fun declineRequest(id: Int, checkCode: String): Boolean = answer(id, checkCode, accept = false)
 
