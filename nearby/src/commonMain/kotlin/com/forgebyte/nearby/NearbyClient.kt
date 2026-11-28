@@ -9,7 +9,6 @@ import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -72,8 +71,8 @@ private val seatLock = Mutex()
  *
  * The store is shared: this client saves its seat on each Welcome, and later writes or clears it only while the store
  * still holds the seat this client saved, so an older client cannot erase or change a newer client's seat. The library
- * makes these checks and writes one at a time for all clients in the app; an app that writes the same store itself, or
- * wraps one stored value in two SeatStore objects, must not do so while a client runs.
+ * makes these checks and writes one at a time for all clients in the app; an app that writes the same store itself must
+ * not do so while a client runs. A Welcome always saves: the newest Welcome wins.
  */
 public class NearbyClient<M, V>(
     private val gameId: String,
@@ -89,7 +88,7 @@ public class NearbyClient<M, V>(
     /** Where the seat is kept for [resume] after the app is killed; see [SeatStore]. Default: memory only. */
     private val seatStore: SeatStore = InMemorySeatStore(),
 ) {
-    internal val http = HttpClient(CIO) { // internal: a test checks it is closed when the join Job is cancelled
+    private val http = HttpClient(CIO) {
         // One slow attempt must not use up the whole first-connect time: each try gets its own limit.
         engine { endpoint { connectTimeout = CONNECT_FOR.inWholeMilliseconds } }
         install(WebSockets) {
@@ -108,7 +107,11 @@ public class NearbyClient<M, V>(
     @Volatile private var attemptJob: Job? = null
     private val sendLock = Mutex() // seal and send in one step, so frame counters reach the host in order
     @Volatile private var leaving = false
-    private val leaveSignal = CompletableDeferred<Unit>()
+    /** Completes when the HTTP client is closed; tests check teardown with it. */
+    internal val httpClosed: Job get() = http.coroutineContext[Job]!!
+
+    /** The connect loop now running; an offline leave() cancels it. */
+    @Volatile private var connectJob: Job? = null
     /** The token of the seat this client last saved; the store is changed for this client only while it holds it. */
     @Volatile private var savedToken: String? = null
     @Volatile private var lastSeq = 0
@@ -177,9 +180,11 @@ public class NearbyClient<M, V>(
         val droppedAt = seat.droppedAtMs
         if (droppedAt != null && wallClock() - droppedAt > keptSeatFor.inWholeMilliseconds) {
             trace("joiner: kept seat dropped ${wallClock() - droppedAt} ms ago; not resumed")
+            // Only this exact record: a newer save of the same seat (another drop time) is not expired.
+            if (seatStore.load() == seat) seatStore.clear()
             _status.value = ClientStatus.Ended(EndReason.Unreachable)
             http.close()
-            return scope.launch { clearIfMine(seat.token) }
+            return Job().apply { complete() }
         }
         return connect(seat.host, seat.port, secret = null, fingerprint = seat.fingerprint, seat.name, resumeToken = seat.token)
     }
@@ -253,9 +258,19 @@ public class NearbyClient<M, V>(
                     shook = true
                     pinned = secure.hostFingerprint
                     _checkCode.value = secure.checkCode
-                    link = Link(this, secure)
-                    // After the link is set: a leave() now either finds the link (and sends Leave) or is seen here.
-                    if (leaving) return@webSocket // left while the link was down or in the key exchange: no hello
+                    // A reconnect proves the seat with its token alone, so a seat that joined by request comes back too.
+                    val hello = ClientMsg.Hello(
+                        PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token,
+                        joinId = joinId.takeIf { token == null },
+                    )
+                    // The link is published and the hello sent in one step under the send lock, the lock leave() takes:
+                    // a leave() before this sends no hello at all, a leave() after it finds the link and sends Leave.
+                    val sent = sendLock.withLock {
+                        if (leaving) return@withLock false
+                        link = Link(this, secure).also { it.socket.send(Frame.Binary(true, it.secure.seal(NearbyProtocol.encode(hello)))) }
+                        true
+                    }
+                    if (!sent) return@webSocket
                     // A link that goes silent with no FIN: Ktor's pinger starts the close after its pong timeout, but the
                     // close never gets an answer, so 'incoming' would wait until the link comes back. End the attempt soon
                     // after the close starts; the grace lets a normal close deliver the host's last messages first.
@@ -268,12 +283,6 @@ public class NearbyClient<M, V>(
                         // close to finish, which a silent link never does (16 Nov test). Cancel the whole attempt.
                         attemptJob?.cancel()
                     }
-                    // A reconnect proves the seat with its token alone, so a seat that joined by request comes back too.
-                    val hello = ClientMsg.Hello(
-                        PROTOCOL_VERSION, gameId, gameVersion, name, secret.takeIf { token == null }, token,
-                        joinId = joinId.takeIf { token == null },
-                    )
-                    send(hello)
                     // A code join waits only when the host says so (HostMsg.Waiting).
                     if (hello.roomSecret == null && token == null) _status.value = ClientStatus.WaitingForHost
                     for (frame in incoming) {
@@ -328,9 +337,12 @@ public class NearbyClient<M, V>(
                 return@launch
             }
             _status.value = if (token == null) ClientStatus.Connecting else ClientStatus.Reconnecting
-            withTimeoutOrNull(1_000) { leaveSignal.await() } // a leave() ends the wait at once
+            delay(1_000)
         }
-    }.also { job -> job.invokeOnCompletion { http.close() } } // also when the app cancels it (see the class KDoc)
+    }.also { job ->
+        connectJob = job
+        job.invokeOnCompletion { http.close() } // also when the app cancels it (see the class KDoc)
+    }
 
     /** Writes [seat] only while the store still holds the seat this client saved (see the class KDoc). */
     private suspend fun saveIfMine(seat: SavedSeat) = seatLock.withLock {
@@ -338,9 +350,8 @@ public class NearbyClient<M, V>(
         if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.save(seat)
     }
 
-    private suspend fun clearIfMine(token: String? = savedToken) = seatLock.withLock {
-        currentCoroutineContext().ensureActive()
-        if (token != null && seatStore.load()?.token == token) seatStore.clear()
+    private suspend fun clearIfMine() = seatLock.withLock {
+        if (savedToken != null && seatStore.load()?.token == savedToken) seatStore.clear()
     }
 
     /**
@@ -395,14 +406,19 @@ public class NearbyClient<M, V>(
         send(ClientMsg.Move(NearbyProtocol.json.encodeToJsonElement(moveSerializer, move), seenSeq))
 
     public suspend fun leave() {
-        leaving = true
-        leaveSignal.complete(Unit)
-        if (link == null) attemptJob?.cancel() // no link yet: stop the attempt that is connecting
-        send(ClientMsg.Leave)
-        link?.socket?.run {
-            flush()
-            close()
+        val l = sendLock.withLock {
+            leaving = true
+            link?.also { runCatching { it.socket.send(Frame.Binary(true, it.secure.seal(NearbyProtocol.encode(ClientMsg.Leave)))) } }
         }
+        if (l != null) {
+            l.socket.flush()
+            l.socket.close() // the connect loop then ends Left
+            return
+        }
+        // No link: the host cannot be told, and no hello goes out any more (see the connect loop). End here.
+        connectJob?.cancel()
+        clearIfMine()
+        _status.value = ClientStatus.Ended(EndReason.Left)
     }
 
     /** Test hook: cut the socket as if Wi-Fi dropped, without telling the host. */

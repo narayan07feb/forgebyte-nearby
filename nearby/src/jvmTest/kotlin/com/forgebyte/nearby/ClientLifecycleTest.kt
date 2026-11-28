@@ -89,7 +89,7 @@ class ClientLifecycleTest {
         val lobby = withTimeoutOrNull(10.seconds) { host.lobby.first { it.seats.size == 2 && !it.seats[1].connected } }
         assertEquals(listOf("Host", "Asha"), lobby?.seats?.map { it.name }, "the host saw the link drop and kept the seat: no Leave")
         assertEquals(saved, store.load(), "the seat stays for resume()")
-        assertTrue(withTimeoutOrNull(5.seconds) { c.http.coroutineContext[kotlinx.coroutines.Job]!!.join() } != null, "the HTTP client is closed")
+        assertTrue(withTimeoutOrNull(5.seconds) { c.httpClosed.join() } != null, "the HTTP client is closed")
     }
 
     @Test
@@ -144,7 +144,8 @@ class ClientLifecycleTest {
             c.leave() // now in the 1 s wait before the next try
             val end = withTimeoutOrNull(10.seconds) { c.status.first { it is ClientStatus.Ended } }
             assertEquals(ClientStatus.Ended(EndReason.Left), end)
-            assertTrue(t0.elapsedNow() < 500.milliseconds, "ended ${t0.elapsedNow()} after leave(), the retry wait is 1 s")
+            withTimeoutOrNull(5.seconds) { c.httpClosed.join() } ?: error("the client was never closed")
+            assertTrue(t0.elapsedNow() < 500.milliseconds, "closed ${t0.elapsedNow()} after leave(), the retry wait is 1 s")
         } finally {
             traceSink = null
         }
@@ -194,6 +195,6 @@ class ClientLifecycleTest {
         c.wallClock = { 100 * 60_000L }
         c.resume(expired).join()
         assertEquals(null, store.load())
-        assertTrue(withTimeoutOrNull(5.seconds) { c.http.coroutineContext[kotlinx.coroutines.Job]!!.join() } != null, "the HTTP client is closed")
+        assertTrue(withTimeoutOrNull(5.seconds) { c.httpClosed.join() } != null, "the HTTP client is closed")
     }
 }

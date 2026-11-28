@@ -96,6 +96,16 @@ class AnswerChecksCodeTest {
     }
 
     @Test
+    fun givenRequestWaiting_whenTheJoinerLeaves_thenTheRequestGoesAndALateAcceptSeatsNobody() {
+        h.request("a", name = "Asha")
+        val out = room.onMessage("a", ClientMsg.Leave)
+        assertTrue(out.closed("a"))
+        assertEquals(emptyList(), room.joinRequests)
+        assertEquals(emptyList(), room.acceptRequest(1, "code-a"))
+        assertEquals(1, room.seatCount)
+    }
+
+    @Test
     fun givenRequest_whenHostAnswersWithACodeItNeverShowed_thenNothingIsTaken() {
         h.request("a", name = "Asha")
         assertEquals(emptyList(), room.acceptRequest(1, "000000"))

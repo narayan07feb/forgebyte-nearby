@@ -147,6 +147,8 @@ public class Room<S, M, V>(
         if (seat != null && msg !is ClientMsg.Hello) seats[seat].apply { joinId = null; heldToken = null }
         when {
             msg is ClientMsg.Hello -> if (seat == null && pending.none { it.conn == conn }) hello(conn, msg)
+            // A joiner who leaves while the host is still deciding: the request goes, so a late Accept cannot seat it.
+            seat == null && msg is ClientMsg.Leave -> if (pending.removeAll { it.conn == conn }) out += RoomOutput.Close(conn)
             seat == null -> Unit // nothing but hello before a seat is given
             msg is ClientMsg.Ready -> if (phase == Phase.LOBBY) {
                 seats[seat].ready = msg.ready
